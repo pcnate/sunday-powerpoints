@@ -18,7 +18,7 @@ const writeMode = argv.write !== null && argv.write !== void 0;
 
 console.log( `${ getMonthName( month ) } ${ year }` )
 console.log( `Using Directory: ${ currentWorkingDirectory }` )
-console.log( `Write mode is ${ writeMode ? 'enabled' : 'disabled, using --write to write files' }\r\n` )
+console.log( `Write mode is ${ writeMode ? 'enabled' : 'disabled, use --write to write files' }\r\n` )
 
 const templateFile = path.join( currentWorkingDirectory, SUNDAY_TEMPLATE )
 
