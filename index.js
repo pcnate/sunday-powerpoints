@@ -7,20 +7,25 @@ const os          = require('os')
 const path        = require('path')
 const moment      = require('moment')
 const to          = require('await-to-js')
+const shortcut    = require('create-desktop-shortcuts');
 
-const SUNDAY_TEMPLATE = 'Sunday Template.pptx';
+const SUNDAY_TEMPLATE = argv?.templateFile || 'Sunday Template.pptx';
+const ext = argv?.ext || 'pptx';
 const futureDate = moment( new Date() ).add( 7, 'day' )
 
-const currentWorkingDirectory = argv.dir !== null && argv.dir   !== void 0 ? argv.dir : __dirname;
-const month     = argv.month !== null && argv.month !== void 0 ? Number( argv.month ) : moment( futureDate ).month() + 1;
-const year      = argv.year  !== null && argv.year  !== void 0 ? Number( argv.year  ) : moment( futureDate ).year();
-const writeMode = argv.write !== null && argv.write !== void 0;
+const templateDirectory = argv?.templateDirectory || __dirname;
+const outputDirectory   = argv?.outputDirectory   || __dirname;
+const month     = Number( argv?.month ) || moment( futureDate ).month() + 1;
+const year      = Number( argv?.year  ) || moment( futureDate ).year();
+const writeMode = !!argv?.write;
+const helpMode  = !!argv?.help;
 
 console.log( `${ getMonthName( month ) } ${ year }` )
-console.log( `Using Directory: ${ currentWorkingDirectory }` )
+console.log( `Using Directory: ${ templateDirectory }` )
 console.log( `Write mode is ${ writeMode ? 'enabled' : 'disabled, use --write to write files' }\r\n` )
 
-const templateFile = path.join( currentWorkingDirectory, SUNDAY_TEMPLATE )
+const templateFile = path.join( templateDirectory, SUNDAY_TEMPLATE )
+
 
 /**
  * get a list of sundays in the month provided
@@ -49,6 +54,7 @@ function sundaysInMonth( m, y ) {
   return sundays;
 }
 
+
 /**
  * get the month name using the month number
  * 
@@ -61,6 +67,7 @@ function getMonthName( month ) {
   const monthName = d.toLocaleString( "default", { month: "long" } );
   return monthName;
 }
+
 
 /**
  * check if the file exists
@@ -76,8 +83,10 @@ function checkIfFileExists( path ) {
   })
 }
 
-// lets get the date a week out so we can work on next weeks powerpoints
 
+/**
+ * lets get the date a week out so we can work on next weeks powerpoints
+ */
 let sundayFiles = sundaysInMonth( month, year ).map( sunday => {
   return [
     year,
@@ -86,29 +95,63 @@ let sundayFiles = sundaysInMonth( month, year ).map( sunday => {
   ].join('-')
 });
 
+
+/**
+ * checks for the existence of the template file
+ */
 [''].map( async () => {
-  let exists = await checkIfFileExists( templateFile )
+  let exists = await checkIfFileExists( resolveToAbsolutePath( templateFile ) )
   if ( !exists ) {
-    console.error(`'${ SUNDAY_TEMPLATE }' not found in '${ currentWorkingDirectory }'` )
+    console.error(`'${ SUNDAY_TEMPLATE }' not found in '${ templateDirectory }'` )
     process.exit(1)
   }
-  console.log(`Found template: '${ currentWorkingDirectory }\\${ SUNDAY_TEMPLATE }'`)
+  console.log(`Found template: '${ templateDirectory }\\${ SUNDAY_TEMPLATE }'`)
 });
 
-sundayFiles.map( async file => {
-  let filePathTodo = path.join( currentWorkingDirectory, file ) + ' TODO.pptx'
-  let filePathDone = path.join( currentWorkingDirectory, file ) + '.pptx'
-  let existsTodo = await checkIfFileExists( filePathTodo )
-  let existsDone = await checkIfFileExists( filePathDone )
 
+/**
+ * replaces windows environment variables with their values in the path
+ * 
+ * @param {string} path windows path strings
+ * @returns string
+ */
+function resolveToAbsolutePath( path ) {
+  return path.replace(/%([^%]+)%/g, function( _, key ) {
+    return process.env[key];
+  });
+}
+
+
+/**
+ * go through each file and check if it should be created
+ */
+sundayFiles.map( async file => {
+  let _outputDirectory = path.join( outputDirectory, file.replace( /-/gmi, '' ) );
+  let templateFilePath = path.join( templateDirectory, SUNDAY_TEMPLATE );
+  let shortcutPathTodo = `${ path.join( templateDirectory, file ) } TODO.lnk`;
+  let shortcutPathDone = `${ path.join( templateDirectory, file ) }.lnk`;
+  let filePath = `${ path.join( _outputDirectory, file ) }.${ ext }`;
+  let existsTodo = await checkIfFileExists( resolveToAbsolutePath( shortcutPathTodo ) );
+  let existsDone = await checkIfFileExists( resolveToAbsolutePath( shortcutPathDone ) );
+
+  // create the shortcut
   if ( !existsTodo && !existsDone ) {
     if ( writeMode ) {
       console.log(`Coping '${ SUNDAY_TEMPLATE }' to '${ file }'`)
-      await fs.copyFile( path.join( currentWorkingDirectory, SUNDAY_TEMPLATE ), filePathTodo )
+
+      let x = await fs.ensureDir( resolveToAbsolutePath( _outputDirectory ) );
+      console.log({ x })
+      await fs.copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
+      let shortcutCreateSuccess = shortcut({ windows: {
+        name: `${ file } TODO`,
+        filePath: filePath,
+        outputPath: templateDirectory,
+      } });
+      console.log({ file, shortcutCreateSuccess })
     } else {
-      console.log(`Will copy '${ SUNDAY_TEMPLATE }' to '${ file }'`)
+      console.log(`Will copy '${ SUNDAY_TEMPLATE }' to '${ filePath }'`)
     }
   } else {
-    console.log(`'${ file }${ existsTodo ? ' TODO' : '' }.pptx' already exists ${ writeMode ? ', not overwriting' : '' }`)
+    console.log(`'${ file }${ existsTodo ? ' TODO' : '' }.${ ext }' already exists ${ writeMode ? ', not overwriting' : '' }`)
   }
 });
