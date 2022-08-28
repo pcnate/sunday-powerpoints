@@ -139,19 +139,17 @@ sundayFiles.map( async file => {
     if ( writeMode ) {
       console.log(`Coping '${ SUNDAY_TEMPLATE }' to '${ file }'`)
 
-      let x = await fs.ensureDir( resolveToAbsolutePath( _outputDirectory ) );
-      console.log({ x })
+      await fs.ensureDir( resolveToAbsolutePath( _outputDirectory ) );
       await fs.copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
-      let shortcutCreateSuccess = shortcut({ windows: {
+      shortcut({ windows: {
         name: `${ file } TODO`,
         filePath: filePath,
         outputPath: templateDirectory,
       } });
-      console.log({ file, shortcutCreateSuccess })
     } else {
       console.log(`Will copy '${ SUNDAY_TEMPLATE }' to '${ filePath }'`)
     }
   } else {
-    console.log(`'${ file }${ existsTodo ? ' TODO' : '' }.${ ext }' already exists ${ writeMode ? ', not overwriting' : '' }`)
+    console.log(`'${ file }${ existsTodo ? ' TODO' : '' }' already exists${ writeMode ? ', not overwriting' : '' }`)
   }
 });
