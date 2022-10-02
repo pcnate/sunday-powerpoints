@@ -80,6 +80,18 @@ function resolveToAbsolutePath( path ) {
 }
 
 
+async function fixExistingShortcuts( directory ) {
+  let options = {}
+  let files = await fs.promises.readdir( directory, options );
+
+  files = files.filter( file => file.endsWith('.lnk' ) );
+  
+  for ( let file of files ) {
+    await fixShortCutPath( path.join( directory, file ), /([A-Z]\:\\Users\\\w+|\%USERPROFILE\%)\\OneDrive/gmi, '%OneDriveConsumer%' );
+  }
+}
+
+
 /**
  * 
  * @param {path} filename path and filename
@@ -163,6 +175,29 @@ async function updateOptions( filePath, options ) {
  * @param {string} filePath path to the shortcut
  * @returns {void}
  */
+async function fixShortCutPath( filePath ) {
+  let options = {}
+  let success = false;
+  
+  let _options = await queryOptions( filePath );
+  if ( !!_options )
+    options = _options;
+  
+  if ( !!options?.target )
+    options.target     = await replaceOneDriveConsumerPath( options.target     );
+  if ( !!options?.workingDir )
+    options.workingDir = await replaceOneDriveConsumerPath( options.workingDir );
+      
+  if ( !!options?.expanded )
+    delete options.expanded
+
+  if ( !!options )
+    success = await updateOptions( filePath, options );
+
+  return success;
+}
+
+
 /**
  * replaces the OneDriveConsumer folder with the variable in a path
  * 
@@ -238,6 +273,7 @@ if ( require.main === module ) {
 
           await fs.ensureDir( resolveToAbsolutePath( _outputDirectory ) );
           await fs.copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
+          await fixExistingShortcuts( resolveToAbsolutePath( _outputDirectory ) );
           await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath );
         } else {
           console.log(`Will copy '${ SUNDAY_TEMPLATE }' to '${ filePath }'`)
@@ -254,6 +290,8 @@ if ( require.main === module ) {
     getMonthName,
     checkIfFileExists,
     resolveToAbsolutePath,
+    fixExistingShortcuts,
+    fixShortCutPath,
     replaceOneDriveConsumerPath,
   }
 }
