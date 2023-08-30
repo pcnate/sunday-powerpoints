@@ -259,6 +259,7 @@ if ( require.main === module ) {
      */
     sundayFiles.map( async file => {
       let _outputDirectory = path.join( outputDirectory, file.replace( /-/gmi, '' ) );
+      let vidsDirectory    = path.join( _outputDirectory, 'Vids' );
       let templateFilePath = path.join( templateDirectory, SUNDAY_TEMPLATE );
       let shortcutPathTodo = `${ path.join( templateDirectory, file ) } TODO.lnk`;
       let shortcutPathDone = `${ path.join( templateDirectory, file ) }.lnk`;
@@ -272,6 +273,7 @@ if ( require.main === module ) {
           console.log(`Coping '${ SUNDAY_TEMPLATE }' to '${ file }'`)
 
           await fs.ensureDir( resolveToAbsolutePath( _outputDirectory ) );
+          await fs.ensureDir( resolveToAbsolutePath( vidsDirectory ) );
           await fs.copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
           await fixExistingShortcuts( resolveToAbsolutePath( _outputDirectory ) );
           await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath );
