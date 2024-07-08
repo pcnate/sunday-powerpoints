@@ -260,10 +260,12 @@ if ( require.main === module ) {
     sundayFiles.map( async file => {
       let _outputDirectory = path.join( outputDirectory, file.replace( /-/gmi, '' ) );
       let vidsDirectory    = path.join( _outputDirectory, 'Vids' );
+      let archiveDirectory = path.join( _outputDirectory, 'archive' );
       let templateFilePath = path.join( templateDirectory, SUNDAY_TEMPLATE );
       let shortcutPathTodo = `${ path.join( templateDirectory, file ) } TODO.lnk`;
       let shortcutPathDone = `${ path.join( templateDirectory, file ) }.lnk`;
       let filePath = `${ path.join( _outputDirectory, file ) }.${ ext }`;
+      let notesPath = path.join( _outputDirectory, `${ file } Notes.txt` );
       let existsTodo = await checkIfFileExists( resolveToAbsolutePath( shortcutPathTodo ) );
       let existsDone = await checkIfFileExists( resolveToAbsolutePath( shortcutPathDone ) );
 
@@ -274,6 +276,8 @@ if ( require.main === module ) {
 
           await fs.ensureDir( resolveToAbsolutePath( _outputDirectory ) );
           await fs.ensureDir( resolveToAbsolutePath( vidsDirectory ) );
+          await fs.ensureDir( resolveToAbsolutePath( archiveDirectory ) );
+          await fs.writeFile( resolveToAbsolutePath( notesPath ), '\r\nTitle: \r\n\r\n' );
           await fs.copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
           await fixExistingShortcuts( resolveToAbsolutePath( _outputDirectory ) );
           await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath );
