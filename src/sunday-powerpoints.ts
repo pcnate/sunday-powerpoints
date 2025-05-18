@@ -105,34 +105,23 @@ export async function fixExistingShortcuts( directory: string, rootPath?: string
  */
 export async function createShortcut( filename: string, description: string, target: string, rootPath?: string ): Promise<boolean> {
   return new Promise( async resolve => {
-
     target = await replaceOneDriveConsumerPath( target, rootPath );
     target = target.replace( /\\/gmi, '/' );
     target = target.replace( /\%OneDriveConsumer\%/gmi, '^%OneDriveConsumer^%' )
-
-    interface ShortcutOptions {
-      target: string;
-      runStyle: number;
-      desc: string;
-    }
-
     ws.create(
       filename,
       {
         target: target,
-        runStyle: ws.NORMAL,
+        runStyle: 1, // 1 = NORMAL
         desc: description,
-      } as ShortcutOptions,
-      ( err: Error | null ) => {
-
+      },
+      (err: any) => {
         if (err) {
           console.error('Error creating shortcut', filename, err);
           resolve(false);
-          return false;
+          return;
         }
-
         resolve(true);
-        return true;
       }
     );
   })
@@ -147,7 +136,7 @@ export async function createShortcut( filename: string, description: string, tar
  */
 export async function queryOptions( filePath: string ): Promise<object | false> {
   return new Promise( async resolve => {
-    ws.query( filePath, ( error: Error | null, _options?: any ) => {
+    ws.query( filePath, ( error: any, _options?: any ) => {
         if ( !!error ) {
           console.error( 'Error querying shortcut options', error );
           resolve( false );
@@ -167,16 +156,15 @@ export async function queryOptions( filePath: string ): Promise<object | false> 
  * @param options windows-shortcut options
  * @returns true if the options were updated, false if there was an error
  */
-export async function updateOptions( filePath: string, options: ws.ShortcutOptions ): Promise<boolean> {
+export async function updateOptions( filePath: string, options: any ): Promise<boolean> {
   return new Promise( async resolve => {
-    ws.edit( filePath, options, ( error: Error | null ) => {
+    ws.edit( filePath, options, ( error: any ) => {
       if ( !!error ) {
         console.error( 'Error editing shortcut', error );
         resolve( false );
         return;
       }
       resolve( true );
-      return;
     })
   });
 }
