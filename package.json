@@ -3,6 +3,25 @@
   "version": "0.0.1",
   "description": "copy a template for each Sunday of the month",
   "main": "lib/index.js",
+  "scripts": {
+    "dev": "tsc && node lib/index.js",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "ts-node src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "author": "pcnate@gmail.com",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pcnate/sunday-powerpoints.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pcnate/sunday-powerpoints/issues"
+  },
+  "homepage": "https://github.com/pcnate/sunday-powerpoints#readme",
   "dependencies": {
     "await-to-js": "^3.0.0",
     "fs-extra": "^10.0.0",
@@ -10,22 +29,6 @@
     "windows-shortcuts": "^0.1.6",
     "yargs": "^17.7.2"
   },
-  "scripts": {
-    "dev": "tsc && node lib/index.js",
-    "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "ts-node src/index.ts"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/pcnate/sunday-powerpoints.git"
-  },
-  "author": "pcnate@gmail.com",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/pcnate/sunday-powerpoints/issues"
-  },
-  "homepage": "https://github.com/pcnate/sunday-powerpoints#readme",
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
