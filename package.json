@@ -8,7 +8,7 @@
     "fs-extra": "^10.0.0",
     "moment": "^2.29.1",
     "windows-shortcuts": "^0.1.6",
-    "yargs": "^16.2.0"
+    "yargs": "^17.7.2"
   },
   "scripts": {
     "dev": "tsc && node lib/index.js",
@@ -26,6 +26,7 @@
   },
   "homepage": "https://github.com/pcnate/sunday-powerpoints#readme",
   "devDependencies": {
-    "@types/node": "^22.15.18"
+    "@types/node": "^22.15.18",
+    "@types/yargs": "^17.0.33"
   }
 }
