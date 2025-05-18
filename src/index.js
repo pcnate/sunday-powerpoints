@@ -10,6 +10,9 @@ const to          = require('await-to-js')
 const ws          = require('windows-shortcuts');
 
 
+let rootPath;
+
+
 /**
  * get a list of sundays in the month provided
  *
@@ -99,10 +102,10 @@ async function fixExistingShortcuts( directory ) {
  * @param {path} target path and target file
  * @returns 
  */
-async function createShortcut( filename, description, target ) {
+async function createShortcut( filename, description, target, rootPath ) {
   return new Promise( async resolve => {
 
-    target = await replaceOneDriveConsumerPath( target );
+    target = await replaceOneDriveConsumerPath( target, rootPath );
     target = target.replace( /\\/gmi, '/' );
     target = target.replace( /\%OneDriveConsumer\%/gmi, '^%OneDriveConsumer^%' )
 
@@ -204,8 +207,14 @@ async function fixShortCutPath( filePath ) {
  * @param {path} path path to replace
  * @returns {path}
  */
-async function replaceOneDriveConsumerPath( path ) {
-  return ( path || '' ).replace( /(([A-Z]\:\\Users\\\w+|\%USERPROFILE\%)\\OneDrive|\%OneDriveConsumer\%)/gmi, '^%OneDriveConsumer^%' );
+async function replaceOneDriveConsumerPath( path, rootPath ) {
+  if (rootPath) {
+    // Replace any existing OneDriveConsumer variable or path with the CLI argument
+    return (path || '').replace(/(([A-Z]:\\Users\\\w+|%USERPROFILE%)\\OneDrive|%OneDriveConsumer%)/gmi, rootPath);
+  } else {
+    // Fallback to old behavior if not provided
+    return (path || '').replace(/(([A-Z]:\\Users\\\w+|%USERPROFILE%)\\OneDrive|%OneDriveConsumer%)/gmi, '^%OneDriveConsumer^%');
+  }
 }
 
 
@@ -222,6 +231,7 @@ if ( require.main === module ) {
     const year = Number( argv?.year ) || moment( futureDate ).year();
     const writeMode = !!argv?.write;
     const helpMode = !!argv?.help;
+    const rootPath = argv?.rootPath || null;
 
     console.log( `${getMonthName( month )} ${year}` )
     console.log( `Using Directory: ${templateDirectory}` )
@@ -280,7 +290,7 @@ if ( require.main === module ) {
           await fs.writeFile( resolveToAbsolutePath( notesPath ), '\r\nTitle: \r\n\r\n' );
           await fs.copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
           await fixExistingShortcuts( resolveToAbsolutePath( _outputDirectory ) );
-          await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath );
+          await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath, rootPath );
         } else {
           console.log(`Will copy '${ SUNDAY_TEMPLATE }' to '${ filePath }'`)
         }
