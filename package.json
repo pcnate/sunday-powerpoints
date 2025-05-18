@@ -2,7 +2,7 @@
   "name": "sunday-powerpoints",
   "version": "0.0.1",
   "description": "copy a template for each Sunday of the month",
-  "main": "src/index.js",
+  "main": "lib/index.js",
   "dependencies": {
     "await-to-js": "^3.0.0",
     "fs-extra": "^10.0.0",
@@ -11,7 +11,8 @@
     "yargs": "^16.2.0"
   },
   "scripts": {
-    "dev": "nodemon src/index.js",
+    "dev": "tsc && node lib/index.js",
+    "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -23,5 +24,8 @@
   "bugs": {
     "url": "https://github.com/pcnate/sunday-powerpoints/issues"
   },
-  "homepage": "https://github.com/pcnate/sunday-powerpoints#readme"
+  "homepage": "https://github.com/pcnate/sunday-powerpoints#readme",
+  "devDependencies": {
+    "@types/node": "^22.15.18"
+  }
 }
