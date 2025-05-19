@@ -124,7 +124,7 @@ export async function createShortcut( filename: string, description: string, tar
         resolve(true);
       }
     );
-  })
+  });
 }
 
 
@@ -135,17 +135,16 @@ export async function createShortcut( filename: string, description: string, tar
  * @returns {object}
  */
 export async function queryOptions( filePath: string ): Promise<object | false> {
-  return new Promise( async resolve => {
+  return new Promise( resolve => {
     ws.query( filePath, ( error: any, _options?: any ) => {
-        if ( !!error ) {
-          console.error( 'Error querying shortcut options', error );
-          resolve( false );
-          return;
-        }
-        resolve( Object.assign( {}, _options ) );
+      if ( !!error ) {
+        console.error( 'Error querying shortcut options', error );
+        resolve( false );
+        return;
       }
-    );
-  })
+      resolve( Object.assign( {}, _options ) );
+    });
+  });
 }
 
 
@@ -157,7 +156,7 @@ export async function queryOptions( filePath: string ): Promise<object | false> 
  * @returns true if the options were updated, false if there was an error
  */
 export async function updateOptions( filePath: string, options: any ): Promise<boolean> {
-  return new Promise( async resolve => {
+  return new Promise( resolve => {
     ws.edit( filePath, options, ( error: any ) => {
       if ( !!error ) {
         console.error( 'Error editing shortcut', error );
@@ -165,7 +164,7 @@ export async function updateOptions( filePath: string, options: any ): Promise<b
         return;
       }
       resolve( true );
-    })
+    });
   });
 }
 
