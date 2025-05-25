@@ -86,25 +86,29 @@
   <script src="/bootstrap/js/bootstrap.bundle.min.js"></script>
   <script>
     // Fetch template file details and show in a Bootstrap card
-    fetch('/api/template-info')
-      .then(res => res.json())
-      .then(info => {
-        const card = document.getElementById('template-card');
-        if (!info || info.error) {
-          card.innerHTML = `<div class="alert alert-warning">Template file not found.</div>`;
-        } else {
-          card.innerHTML = `
-            <div class="card">
-              <div class="card-body">
-                <h5 class="card-title mb-2">Template File</h5>
-                <p class="card-text mb-1"><strong>Name:</strong> ${info.name}</p>
-                <p class="card-text mb-1"><strong>Last Modified:</strong> ${info.lastModified}</p>
-                <p class="card-text mb-0"><strong>Size:</strong> ${info.size}</p>
+    function fetchAndRenderTemplateInfo() {
+      fetch('/api/template-info')
+        .then(res => res.json())
+        .then(info => {
+          const card = document.getElementById('template-card');
+          if (!info || info.error) {
+            card.innerHTML = `<div class="alert alert-warning">Template file not found.</div>`;
+          } else {
+            card.innerHTML = `
+              <div class="card">
+                <div class="card-body">
+                  <h5 class="card-title mb-2">Template File</h5>
+                  <p class="card-text mb-1"><strong>Name:</strong> ${info.name}</p>
+                  <p class="card-text mb-1"><strong>Last Modified:</strong> ${info.lastModified}</p>
+                  <p class="card-text mb-0"><strong>Size:</strong> ${info.size}</p>
+                </div>
               </div>
-            </div>
-          `;
-        }
-      });
+            `;
+          }
+        });
+    }
+    fetchAndRenderTemplateInfo();
+    setInterval(fetchAndRenderTemplateInfo, 10000);
 
     document.addEventListener('DOMContentLoaded', function() {
       // Set default month/year for the modal
@@ -124,14 +128,26 @@
 
       const runForm = document.getElementById('runForm');
       let foldersOnlyMode = true; // default to folders-only
-      // Button event listeners to set mode
+      // Button event listeners to set mode and reset modal
       document.getElementById('foldersOnlyBtn').addEventListener('click', function() {
         foldersOnlyMode = true;
         document.getElementById('runModalLabel').textContent = 'Create Folders for Sundays';
+        // Reset modal state
+        runForm.reset();
+        document.getElementById('runResult').innerHTML = '';
+        document.getElementById('monthInput').value = defaultMonth;
+        document.getElementById('yearInput').value = defaultYear;
+        runForm.setAttribute('data-endpoint', '/api/run-folders');
       });
       document.getElementById('copyTemplateBtn').addEventListener('click', function() {
         foldersOnlyMode = false;
         document.getElementById('runModalLabel').textContent = 'Copy Template for Sundays';
+        // Reset modal state
+        runForm.reset();
+        document.getElementById('runResult').innerHTML = '';
+        document.getElementById('monthInput').value = defaultMonth;
+        document.getElementById('yearInput').value = defaultYear;
+        runForm.setAttribute('data-endpoint', '/api/copy-template');
       });
       if (runForm) {
         runForm.addEventListener('submit', async function(e) {
@@ -142,10 +158,11 @@
           const resultDiv = document.getElementById('runResult');
           resultDiv.innerHTML = '<div class="text-info">Running...</div>';
           try {
-            const res = await fetch('/api/run-folders', {
+            const endpoint = runForm.getAttribute('data-endpoint') || '/api/run-folders';
+            const res = await fetch(endpoint, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ month, year, write, foldersOnly: foldersOnlyMode })
+              body: JSON.stringify({ month, year, write })
             });
             const data = await res.json();
             if (data.success) {
@@ -155,6 +172,7 @@
             }
             // Refresh sidebar after completion
             fetchAndRenderFolders();
+            fetchAndRenderTemplateInfo();
           } catch (err) {
             resultDiv.innerHTML = `<div class="alert alert-danger">Request failed.</div>`;
           }
