@@ -62,13 +62,14 @@ app.get('/api/folders', async (request: Request, response: Response) => {
     .map((entry: fs.Dirent) => entry.name)
     .sort((a: string, b: string) => b.localeCompare(a)); // Newest first
 
-  // For each folder, check for pptx, mp4, and thumbnail
+  // For each folder, check for pptx, mp4, thumbnail, and notes file
   const folderData = await Promise.all(folders.map(async (folder) => {
     const folderPath = path.join(config.outputDirectory, folder);
     // Check for file with configured ext in main folder
     let hasFile = false;
+    let files: string[] = [];
     try {
-      const files = await fs.promises.readdir(folderPath);
+      files = await fs.promises.readdir(folderPath);
       hasFile = files.some(f => f.toLowerCase().endsWith('.' + config.ext.toLowerCase()));
     } catch {}
     // Check for mp4 and thumbnail in Vids subdir
@@ -83,15 +84,26 @@ app.get('/api/folders', async (request: Request, response: Response) => {
         thumbnail = `/api/thumbnail/${encodeURIComponent(folder)}`;
       }
     } catch {}
+    // Check for notes file
+    const hasNotes = hasNotesFile(folder, files);
     return {
       name: folder,
       hasFile,
       hasMp4,
       thumbnail,
+      hasNotes,
+      files, // for debugging or future use, can be removed if not needed
     };
   }));
   response.json(folderData);
 });
+
+// Helper to check for notes file in a folder
+function hasNotesFile(folderName: string, files: string[]): boolean {
+  // Match notes file: YYYYMMDD-notes.txt, YYYY-MM-DD-notes.txt, YYYYMMDD Notes.txt, YYYY-MM-DD Notes.txt (case-insensitive, flexible on dash/space)
+  const notesRegex = /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i;
+  return files.some(f => notesRegex.test(f));
+}
 
 // Endpoint to serve thumbnail images as JPEGs (no query string, auto-detect first .jpeg or .thm)
 app.get('/api/thumbnail/:folder', async (req: Request, res: Response) => {
@@ -235,6 +247,51 @@ app.post('/api/copy-template', async (req: Request, res: Response) => {
   }
   const result = await runFolderCreation({ month: Number(month), year: Number(year), write: !!write, foldersOnly: false });
   res.json(result);
+});
+
+// API endpoint to get notes file for a folder
+app.get('/api/notes', (req, res) => {
+  (async () => {
+    const folder = req.query.folder as string;
+    if (!folder) return res.status(400).send('Missing folder');
+    const folderPath = path.join(config.outputDirectory, folder);
+    let files: string[] = [];
+    try {
+      files = await fs.promises.readdir(folderPath);
+    } catch {
+      return res.status(404).send('Folder not found');
+    }
+    const notesFile = files.find(f => /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i.test(f));
+    if (!notesFile) return res.status(404).send('Notes file not found');
+    const notesPath = path.join(folderPath, notesFile);
+    try {
+      const text = await fs.promises.readFile(notesPath, 'utf8');
+      res.type('text/plain').send(text);
+    } catch {
+      res.status(500).send('Could not read notes file');
+    }
+  })();
+});
+
+// API endpoint to update notes file for a folder
+app.post('/api/notes', function(req: any, res: any) {
+  const folder = req.query.folder as string;
+  if (!folder) return res.status(400).send('Missing folder');
+  const folderPath = path.join(config.outputDirectory, folder);
+  fs.promises.readdir(folderPath)
+    .then(files => {
+      const notesFile = files.find(f => /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i.test(f));
+      if (!notesFile) { res.status(404).send('Notes file not found'); return; }
+      const notesPath = path.join(folderPath, notesFile);
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', () => {
+        fs.promises.writeFile(notesPath, body, 'utf8')
+          .then(() => res.send('OK'))
+          .catch(() => res.status(500).send('Could not save notes file'));
+      });
+    })
+    .catch(() => res.status(404).send('Folder not found'));
 });
 
 // Serve index.html for root

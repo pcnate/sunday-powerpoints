@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sunday PowerPoints</title>
   <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
   <style>
     body { min-height: 100vh; }
     .sidebar {
@@ -73,6 +74,25 @@
               <button type="submit" class="btn btn-success">Run</button>
             </form>
             <div id="runResult" class="mt-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Notes Modal -->
+    <div class="modal fade" id="notesModal" tabindex="-1" aria-labelledby="notesModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="notesModalLabel">Notes for <span id="notesModalDate"></span></h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <textarea id="notesModalText" class="form-control" rows="12" style="font-family:monospace;"></textarea>
+            <div id="notesModalStatus" class="mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="button" class="btn btn-primary" id="notesModalSaveBtn">Save</button>
           </div>
         </div>
       </div>
@@ -185,26 +205,79 @@
     }
     function renderFolderList(folders) {
       const list = document.getElementById('folder-list');
-      list.innerHTML = '';
+      // Build a map of current DOM items by folder name
+      const existingItems = {};
+      Array.from(list.children).forEach(li => {
+        const folderName = li.getAttribute('data-folder');
+        if (folderName) existingItems[folderName] = li;
+      });
+
+      // Track folders that are still present
+      const seen = new Set();
+
+      // Insert/update items in sorted order (newest first)
       folders.forEach(folder => {
-        // Only show folders matching YYYYMMDD or YYYY-MM-DD
         const isDateFolder = /^\d{8}$/.test(folder.name) || /^\d{4}-\d{2}-\d{2}$/.test(folder.name);
         if (!isDateFolder) return;
-        const li = document.createElement('li');
-        li.className = 'list-group-item d-flex align-items-center';
-        let html = `<div class="flex-grow-1 d-flex align-items-center">`;
+        seen.add(folder.name);
+        let li = existingItems[folder.name];
+        let html = `<div class=\"flex-grow-1 d-flex align-items-center\">`;
         html += `<strong>${folder.name}</strong>`;
-        html += `<span class="ms-2" style="font-size:1.2em;">`;
-        html += folder.hasFile ? '<span title="PowerPoint file">📑</span>' : '<span title="No PowerPoint file" style="opacity:0.3;">📑</span>';
-        html += folder.hasMp4 ? '<span title="MP4 video in Vids/" class="ms-1">🎬</span>' : '<span title="No MP4 video" class="ms-1" style="opacity:0.3;">🎬</span>';
+        html += `<span class=\"ms-2\" style=\"font-size:1.2em;\">`;
+        html += folder.hasFile
+          ? `<span title=\"PowerPoint file present. This is the main presentation file for this Sunday.\"><i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:1em;opacity:1;margin-right:2px;'></i></span>`
+          : `<span title=\"No PowerPoint file. This Sunday does not have a presentation file yet.\"><i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:1em;opacity:0.3;margin-right:2px;'></i></span>`;
+        html += folder.hasMp4
+          ? `<span title=\"MP4 video present in Vids/. This is a video recording of the sermon.\"><i class='fa fa-film' style='color:#444;font-size:0.8em;opacity:1;margin-right:2px;padding-left:5px;'></i></span>`
+          : `<span title=\"No MP4 video. No video recording found for this Sunday.\"><i class='fa fa-film' style='color:#444;font-size:0.8em;opacity:0.3;margin-right:2px;padding-left:5px;'></i></span>`;
+        html += folder.hasNotes
+          ? `<span title=\"Notes text file present. This file contains notes or Bible verses for this Sunday.\"><i class='fa fa-sticky-note notes-icon' data-folder=\"${folder.name}\" style='color:#007bff;font-size:0.8em;opacity:1;margin-right:2px;padding-left:5px;cursor:pointer;'></i></span>`
+          : `<span title=\"No notes text file. No notes or Bible verses file found for this Sunday.\"><i class='fa fa-sticky-note' style='color:#007bff;font-size:0.8em;opacity:0.3;margin-right:2px;padding-left:5px;'></i></span>`;
         html += `</span>`;
         html += `</div>`;
-        if (folder.thumbnail) {
-          html += `<img src="${folder.thumbnail}" alt="thumbnail" style="height:40px;width:auto;margin-left:10px;border-radius:4px;border:1px solid #ccc;object-fit:cover;">`;
+        if (folder.thumbnail && typeof folder.thumbnail === 'string' && folder.thumbnail.trim() !== '') {
+          html += `<img src=\"${folder.thumbnail}\" alt=\"thumbnail\" style=\"height:40px;width:auto;margin-left:10px;border-radius:4px;border:1px solid #ccc;object-fit:cover;\">`;
         }
-        li.innerHTML = html;
-        list.appendChild(li);
+        if (!li) {
+          // Create new item
+          li = document.createElement('li');
+          li.className = 'list-group-item d-flex align-items-center';
+          li.setAttribute('data-folder', folder.name);
+          li.innerHTML = html;
+          // Insert in correct position (sorted by folders array order)
+          let inserted = false;
+          for (let i = 0; i < list.children.length; i++) {
+            const other = list.children[i];
+            const otherName = other.getAttribute('data-folder');
+            if (otherName && folders.findIndex(f => f.name === folder.name) < folders.findIndex(f => f.name === otherName)) {
+              list.insertBefore(li, other);
+              inserted = true;
+              break;
+            }
+          }
+          if (!inserted) list.appendChild(li);
+        } else {
+          // Update existing item if changed
+          if (li.innerHTML !== html) li.innerHTML = html;
+        }
       });
+
+      // Remove items not in the new folder list
+      Object.keys(existingItems).forEach(folderName => {
+        if (!seen.has(folderName)) {
+          list.removeChild(existingItems[folderName]);
+        }
+      });
+
+      // Add click event for notes icons
+      setTimeout(() => {
+        document.querySelectorAll('.notes-icon').forEach(icon => {
+          icon.addEventListener('click', function(e) {
+            const folder = this.getAttribute('data-folder');
+            openNotesModal(folder);
+          });
+        });
+      }, 0);
       if (!folders.some(folder => /^\d{8}$/.test(folder.name) || /^\d{4}-\d{2}-\d{2}$/.test(folder.name))) {
         list.innerHTML = '<li class="list-group-item">No folders found.</li>';
       }
@@ -220,6 +293,41 @@
     fetchAndRenderFolders();
     // Refresh every 10 seconds
     setInterval(fetchAndRenderFolders, 10000);
+
+    // Open notes modal and fetch notes text
+    function openNotesModal(folderName) {
+      document.getElementById('notesModalDate').textContent = folderName;
+      document.getElementById('notesModalText').value = '';
+      document.getElementById('notesModalStatus').innerHTML = '';
+      const modal = new bootstrap.Modal(document.getElementById('notesModal'));
+      modal.show();
+      fetch(`/api/notes?folder=${encodeURIComponent(folderName)}`)
+        .then(res => res.ok ? res.text() : Promise.reject('Not found'))
+        .then(text => {
+          document.getElementById('notesModalText').value = text;
+        })
+        .catch(() => {
+          document.getElementById('notesModalText').value = '';
+          document.getElementById('notesModalStatus').innerHTML = '<div class="alert alert-danger">Could not load notes file.</div>';
+        });
+      // Save handler
+      document.getElementById('notesModalSaveBtn').onclick = function() {
+        const newText = document.getElementById('notesModalText').value;
+        document.getElementById('notesModalStatus').innerHTML = '<span class="text-info">Saving...</span>';
+        fetch(`/api/notes?folder=${encodeURIComponent(folderName)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: newText
+        })
+        .then(res => res.ok ? res.text() : Promise.reject('Save failed'))
+        .then(() => {
+          document.getElementById('notesModalStatus').innerHTML = '<span class="text-success">Saved!</span>';
+        })
+        .catch(() => {
+          document.getElementById('notesModalStatus').innerHTML = '<span class="text-danger">Save failed.</span>';
+        });
+      };
+    }
   </script>
 </body>
 </html>
