@@ -271,10 +271,11 @@ export interface SundayPowerpointsOptions {
   ext: string;
   writeMode: boolean;
   rootPath?: string;
+  foldersOnly?: boolean;
 }
 
 export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
-  const { month, year, templateDirectory, outputDirectory, SUNDAY_TEMPLATE, ext, writeMode, rootPath } = options;
+  const { month, year, templateDirectory, outputDirectory, SUNDAY_TEMPLATE, ext, writeMode, rootPath, foldersOnly } = options;
   console.log(`${getMonthName(month)} ${year}`);
   console.log(`Using Directory: ${templateDirectory}`);
   console.log(`Write mode is ${writeMode ? 'enabled' : 'disabled, use --write to write files'}\r\n`);
@@ -282,12 +283,17 @@ export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
   const templateFile = path.join(templateDirectory, SUNDAY_TEMPLATE);
 
   // checks for the existence of the template file
-  const exists = await checkIfFileExists(resolveToAbsolutePath(templateFile));
-  if (!exists) {
-    console.error(`'${SUNDAY_TEMPLATE}' not found in '${templateDirectory}'`);
-    process.exit(1);
+  if (!foldersOnly) {
+    const exists = await checkIfFileExists(resolveToAbsolutePath(templateFile));
+    if (!exists) {
+      const errorMsg = `'${SUNDAY_TEMPLATE}' not found in '${templateDirectory}'`;
+      console.error(errorMsg);
+      process.send?.({ type: 'error', error: errorMsg });
+      process.exit(1);
+    }
+    const foundMsg = `Found template: '${templateDirectory}\\${SUNDAY_TEMPLATE}'`;
+    console.log(foundMsg);
   }
-  console.log(`Found template: '${templateDirectory}\\${SUNDAY_TEMPLATE}'`);
 
   // lets get the date a week out so we can work on next weeks powerpoints
   let sundayFiles: string[] = sundaysInMonth(month, year).map(sunday => {
@@ -314,19 +320,29 @@ export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
     // create the shortcut
     if (!existsTodo && !existsDone) {
       if (writeMode) {
-        console.log(`Coping '${SUNDAY_TEMPLATE}' to '${file}'`);
+        const copyingMsg = `Coping '${SUNDAY_TEMPLATE}' to '${file}'`;
+        console.log(copyingMsg);
         await ensureDir(resolveToAbsolutePath(_outputDirectory));
         await ensureDir(resolveToAbsolutePath(vidsDirectory));
         await ensureDir(resolveToAbsolutePath(archiveDirectory));
-        await writeFile(resolveToAbsolutePath(notesPath), '\r\nTitle: \r\n\r\n');
-        await copyFile(resolveToAbsolutePath(templateFilePath), resolveToAbsolutePath(filePath));
-        await fixExistingShortcuts(resolveToAbsolutePath(_outputDirectory), rootPath);
-        await createShortcut(path.join(templateDirectory, `${file} TODO.lnk`), `Sunday ${file}`, filePath, rootPath);
+        if (!foldersOnly) {
+          await writeFile(resolveToAbsolutePath(notesPath), '\r\nTitle: \r\n\r\n');
+          await copyFile(resolveToAbsolutePath(templateFilePath), resolveToAbsolutePath(filePath));
+          await fixExistingShortcuts(resolveToAbsolutePath(_outputDirectory), rootPath);
+          await createShortcut(path.join(templateDirectory, `${file} TODO.lnk`), `Sunday ${file}`, filePath, rootPath);
+        }
       } else {
-        console.log(`Will copy '${SUNDAY_TEMPLATE}' to '${filePath}'`);
+        if (!foldersOnly) {
+          const willCopyMsg = `Will copy '${SUNDAY_TEMPLATE}' to '${filePath}'`;
+          console.log(willCopyMsg);
+        } else {
+          const willCreateFoldersMsg = `Will create folders for '${file}'`;
+          console.log(willCreateFoldersMsg);
+        }
       }
     } else {
-      console.log(`'${file}${existsTodo ? ' TODO' : ''}' already exists${writeMode ? ', not overwriting' : ''}`);
+      const alreadyExistsMsg = `'${file}${existsTodo ? ' TODO' : ''}' already exists${writeMode ? ', not overwriting' : ''}`;
+      console.log(alreadyExistsMsg);
     }
   }
 }
