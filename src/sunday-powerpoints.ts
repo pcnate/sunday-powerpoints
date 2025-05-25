@@ -293,6 +293,7 @@ export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
     }
     const foundMsg = `Found template: '${templateDirectory}\\${SUNDAY_TEMPLATE}'`;
     console.log(foundMsg);
+    process.send?.({ type: 'info', message: foundMsg });
   }
 
   // lets get the date a week out so we can work on next weeks powerpoints
@@ -322,6 +323,7 @@ export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
       if (writeMode) {
         const copyingMsg = `Coping '${SUNDAY_TEMPLATE}' to '${file}'`;
         console.log(copyingMsg);
+        process.send?.({ type: 'info', message: copyingMsg });
         await ensureDir(resolveToAbsolutePath(_outputDirectory));
         await ensureDir(resolveToAbsolutePath(vidsDirectory));
         await ensureDir(resolveToAbsolutePath(archiveDirectory));
@@ -335,14 +337,17 @@ export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
         if (!foldersOnly) {
           const willCopyMsg = `Will copy '${SUNDAY_TEMPLATE}' to '${filePath}'`;
           console.log(willCopyMsg);
+          process.send?.({ type: 'info', message: willCopyMsg });
         } else {
           const willCreateFoldersMsg = `Will create folders for '${file}'`;
           console.log(willCreateFoldersMsg);
+          process.send?.({ type: 'info', message: willCreateFoldersMsg });
         }
       }
     } else {
       const alreadyExistsMsg = `'${file}${existsTodo ? ' TODO' : ''}' already exists${writeMode ? ', not overwriting' : ''}`;
       console.log(alreadyExistsMsg);
+      process.send?.({ type: 'info', message: alreadyExistsMsg });
     }
   }
 }
