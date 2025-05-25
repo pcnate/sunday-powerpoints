@@ -321,13 +321,21 @@ export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
     // create the shortcut
     if (!existsTodo && !existsDone) {
       if (writeMode) {
-        const copyingMsg = `Coping '${SUNDAY_TEMPLATE}' to '${file}'`;
-        console.log(copyingMsg);
-        process.send?.({ type: 'info', message: copyingMsg });
-        await ensureDir(resolveToAbsolutePath(_outputDirectory));
-        await ensureDir(resolveToAbsolutePath(vidsDirectory));
-        await ensureDir(resolveToAbsolutePath(archiveDirectory));
-        if (!foldersOnly) {
+        if (foldersOnly) {
+          // Only create folders, skip notes, copy, shortcut
+          await ensureDir(resolveToAbsolutePath(_outputDirectory));
+          await ensureDir(resolveToAbsolutePath(vidsDirectory));
+          await ensureDir(resolveToAbsolutePath(archiveDirectory));
+          const msg = `Created folders for '${file}'`;
+          console.log(msg);
+          process.send?.({ type: 'info', message: msg });
+        } else {
+          const copyingMsg = `Coping '${SUNDAY_TEMPLATE}' to '${file}'`;
+          console.log(copyingMsg);
+          process.send?.({ type: 'info', message: copyingMsg });
+          await ensureDir(resolveToAbsolutePath(_outputDirectory));
+          await ensureDir(resolveToAbsolutePath(vidsDirectory));
+          await ensureDir(resolveToAbsolutePath(archiveDirectory));
           await writeFile(resolveToAbsolutePath(notesPath), '\r\nTitle: \r\n\r\n');
           await copyFile(resolveToAbsolutePath(templateFilePath), resolveToAbsolutePath(filePath));
           await fixExistingShortcuts(resolveToAbsolutePath(_outputDirectory), rootPath);

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sunday PowerPoints</title>
+  <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css">
+  <style>
+    body { min-height: 100vh; }
+    .sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 300px;
+      height: 100vh;
+      background: #f8f9fa;
+      border-left: 1px solid #dee2e6;
+      padding: 2rem 1rem 1rem 1rem;
+      overflow-y: auto;
+      box-shadow: -2px 0 8px rgba(0,0,0,0.03);
+    }
+    .main-content {
+      margin-right: 320px;
+      padding: 2rem 1rem 1rem 1rem;
+    }
+    @media (max-width: 900px) {
+      .sidebar { position: static; width: 100%; height: auto; border-left: none; box-shadow: none; }
+      .main-content { margin-right: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-content">
+    <h1>Sunday PowerPoints</h1>
+    <div id="template-card" class="mb-4"></div>
+    <button class="btn btn-primary mb-3 me-2" id="foldersOnlyBtn" data-bs-toggle="modal" data-bs-target="#runModal">Create Folders</button>
+    <button class="btn btn-secondary mb-3" id="copyTemplateBtn" data-bs-toggle="modal" data-bs-target="#runModal">Copy Template</button>
+    <!-- Modal -->
+    <div class="modal fade" id="runModal" tabindex="-1" aria-labelledby="runModalLabel" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="runModalLabel">Create Folders for Sundays</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <form id="runForm">
+              <div class="mb-3">
+                <label for="monthInput" class="form-label">Month</label>
+                <select class="form-select" id="monthInput" required>
+                  <option value="1">January</option>
+                  <option value="2">February</option>
+                  <option value="3">March</option>
+                  <option value="4">April</option>
+                  <option value="5">May</option>
+                  <option value="6">June</option>
+                  <option value="7">July</option>
+                  <option value="8">August</option>
+                  <option value="9">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label for="yearInput" class="form-label">Year</label>
+                <input type="number" class="form-control" id="yearInput" min="2000" max="2100" required>
+              </div>
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="writeInput">
+                <label class="form-check-label" for="writeInput">Write (actually create folders/files)</label>
+              </div>
+              <button type="submit" class="btn btn-success">Run</button>
+            </form>
+            <div id="runResult" class="mt-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Main content goes here -->
+  </div>
+  <aside class="sidebar">
+    <h5 class="mb-3">Output Folders</h5>
+    <ul id="folder-list" class="list-group"></ul>
+  </aside>
+  <script src="/bootstrap/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // Fetch template file details and show in a Bootstrap card
+    fetch('/api/template-info')
+      .then(res => res.json())
+      .then(info => {
+        const card = document.getElementById('template-card');
+        if (!info || info.error) {
+          card.innerHTML = `<div class="alert alert-warning">Template file not found.</div>`;
+        } else {
+          card.innerHTML = `
+            <div class="card">
+              <div class="card-body">
+                <h5 class="card-title mb-2">Template File</h5>
+                <p class="card-text mb-1"><strong>Name:</strong> ${info.name}</p>
+                <p class="card-text mb-1"><strong>Last Modified:</strong> ${info.lastModified}</p>
+                <p class="card-text mb-0"><strong>Size:</strong> ${info.size}</p>
+              </div>
+            </div>
+          `;
+        }
+      });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      // Set default month/year for the modal
+      const now = new Date();
+      let defaultMonth = now.getMonth() + 1; // JS months are 0-based
+      let defaultYear = now.getFullYear();
+      if (now.getDate() >= 16) {
+        if (defaultMonth === 12) {
+          defaultMonth = 1;
+          defaultYear++;
+        } else {
+          defaultMonth++;
+        }
+      }
+      document.getElementById('monthInput').value = defaultMonth;
+      document.getElementById('yearInput').value = defaultYear;
+
+      const runForm = document.getElementById('runForm');
+      let foldersOnlyMode = true; // default to folders-only
+      // Button event listeners to set mode
+      document.getElementById('foldersOnlyBtn').addEventListener('click', function() {
+        foldersOnlyMode = true;
+        document.getElementById('runModalLabel').textContent = 'Create Folders for Sundays';
+      });
+      document.getElementById('copyTemplateBtn').addEventListener('click', function() {
+        foldersOnlyMode = false;
+        document.getElementById('runModalLabel').textContent = 'Copy Template for Sundays';
+      });
+      if (runForm) {
+        runForm.addEventListener('submit', async function(e) {
+          e.preventDefault();
+          const month = document.getElementById('monthInput').value;
+          const year = document.getElementById('yearInput').value;
+          const write = document.getElementById('writeInput').checked;
+          const resultDiv = document.getElementById('runResult');
+          resultDiv.innerHTML = '<div class="text-info">Running...</div>';
+          try {
+            const res = await fetch('/api/run-folders', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ month, year, write, foldersOnly: foldersOnlyMode })
+            });
+            const data = await res.json();
+            if (data.success) {
+              resultDiv.innerHTML = `<pre class="alert alert-success">${data.message || 'Folders created successfully.'}</pre>`;
+            } else {
+              resultDiv.innerHTML = `<pre class="alert alert-danger">${data.error || 'An error occurred.'}</pre>`;
+            }
+            // Refresh sidebar after completion
+            fetchAndRenderFolders();
+          } catch (err) {
+            resultDiv.innerHTML = `<div class="alert alert-danger">Request failed.</div>`;
+          }
+        });
+      }
+    });
+
+    function icon(flag, label, yesIcon, noIcon) {
+      return `<span title="${label}" style="margin-right:6px;">${flag ? yesIcon : noIcon}</span>`;
+    }
+    function renderFolderList(folders) {
+      const list = document.getElementById('folder-list');
+      list.innerHTML = '';
+      folders.forEach(folder => {
+        // Only show folders matching YYYYMMDD or YYYY-MM-DD
+        const isDateFolder = /^\d{8}$/.test(folder.name) || /^\d{4}-\d{2}-\d{2}$/.test(folder.name);
+        if (!isDateFolder) return;
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex align-items-center';
+        let html = `<div class="flex-grow-1 d-flex align-items-center">`;
+        html += `<strong>${folder.name}</strong>`;
+        html += `<span class="ms-2" style="font-size:1.2em;">`;
+        html += folder.hasFile ? '<span title="PowerPoint file">📑</span>' : '<span title="No PowerPoint file" style="opacity:0.3;">📑</span>';
+        html += folder.hasMp4 ? '<span title="MP4 video in Vids/" class="ms-1">🎬</span>' : '<span title="No MP4 video" class="ms-1" style="opacity:0.3;">🎬</span>';
+        html += `</span>`;
+        html += `</div>`;
+        if (folder.thumbnail) {
+          html += `<img src="${folder.thumbnail}" alt="thumbnail" style="height:40px;width:auto;margin-left:10px;border-radius:4px;border:1px solid #ccc;object-fit:cover;">`;
+        }
+        li.innerHTML = html;
+        list.appendChild(li);
+      });
+      if (!folders.some(folder => /^\d{8}$/.test(folder.name) || /^\d{4}-\d{2}-\d{2}$/.test(folder.name))) {
+        list.innerHTML = '<li class="list-group-item">No folders found.</li>';
+      }
+    }
+
+    function fetchAndRenderFolders() {
+      fetch('/api/folders')
+        .then(res => res.json())
+        .then(renderFolderList);
+    }
+
+    // Initial fetch
+    fetchAndRenderFolders();
+    // Refresh every 10 seconds
+    setInterval(fetchAndRenderFolders, 10000);
+  </script>
+</body>
+</html>
