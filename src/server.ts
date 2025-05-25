@@ -35,6 +35,12 @@ if (process.env.NODE_ENV === 'development') {
 const app = express();
 app.use(express.json());
 
+// Log all /api requests
+app.use('/api', (req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 // Determine static directory based on environment
 const staticDir = process.env.NODE_ENV === 'development'
   ? path.join(__dirname, 'webapp')
