@@ -14,7 +14,6 @@
       right: 0;
       width: 300px;
       height: 100vh;
-      background: #f8f9fa;
       border-left: 1px solid #dee2e6;
       padding: 2rem 1rem 1rem 1rem;
       overflow-y: auto;
@@ -22,84 +21,155 @@
     }
     .main-content {
       margin-right: 320px;
-      padding: 2rem 1rem 1rem 1rem;
+      padding-left: 1rem;
+      padding-right: 1rem;
+      padding-top: 0;
+      padding-bottom: 0;
     }
     @media (max-width: 900px) {
       .sidebar { position: static; width: 100%; height: auto; border-left: none; box-shadow: none; }
       .main-content { margin-right: 0; }
     }
+    #song-library-table-scroll {
+      overflow: auto;
+      border: 1px solid #eee;
+      border-radius: 6px;
+      background: #fff;
+    }
+    #song-library-table-scroll table {
+      margin-bottom: 0;
+    }
+    /* Sticky tab bar and search row */
+    #mainTab {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    #song-library .row.mb-2 {
+      position: sticky;
+      top: 41px;
+      z-index: 10;
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
   </style>
 </head>
 <body>
   <div class="main-content">
-    <h1>Sunday PowerPoints</h1>
-    <div id="template-card" class="mb-4"></div>
-    <button class="btn btn-primary mb-3 me-2" id="foldersOnlyBtn" data-bs-toggle="modal" data-bs-target="#runModal">Create Folders</button>
-    <button class="btn btn-secondary mb-3" id="copyTemplateBtn" data-bs-toggle="modal" data-bs-target="#runModal">Copy Template</button>
-    <!-- Modal -->
-    <div class="modal fade" id="runModal" tabindex="-1" aria-labelledby="runModalLabel" aria-hidden="true">
-      <div class="modal-dialog">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title" id="runModalLabel">Create Folders for Sundays</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <ul class="nav nav-tabs mb-3 bg-body" id="mainTab" role="tablist" style="display:flex;align-items:center;">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="song-library-tab" data-bs-toggle="tab" data-bs-target="#song-library" type="button" role="tab" aria-controls="song-library" aria-selected="true">Song Library</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="upcoming-songs-tab" data-bs-toggle="tab" data-bs-target="#upcoming-songs" type="button" role="tab" aria-controls="upcoming-songs" aria-selected="false">Upcoming Songs</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="admin-tab" data-bs-toggle="tab" data-bs-target="#admin" type="button" role="tab" aria-controls="admin" aria-selected="false">Admin</button>
+      </li>
+      <li class="ms-auto" style="margin-left:auto;">
+        <select id="themeToggle" class="form-select form-select-sm" style="width:auto;min-width:120px;">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </li>
+    </ul>
+    <div class="tab-content" id="mainTabContent">
+      <div class="tab-pane fade show active" id="song-library" role="tabpanel" aria-labelledby="song-library-tab">
+        <h2>Song Library</h2>
+        <div class="row mb-2 bg-body">
+          <div class="col-md-4">
+            <select id="songBookFilter" class="form-select">
+              <option value="">All Books/Sources</option>
+            </select>
           </div>
-          <div class="modal-body">
-            <form id="runForm">
-              <div class="mb-3">
-                <label for="monthInput" class="form-label">Month</label>
-                <select class="form-select" id="monthInput" required>
-                  <option value="1">January</option>
-                  <option value="2">February</option>
-                  <option value="3">March</option>
-                  <option value="4">April</option>
-                  <option value="5">May</option>
-                  <option value="6">June</option>
-                  <option value="7">July</option>
-                  <option value="8">August</option>
-                  <option value="9">September</option>
-                  <option value="10">October</option>
-                  <option value="11">November</option>
-                  <option value="12">December</option>
-                </select>
+          <div class="col-md-4">
+            <input id="songSearchInput" type="text" class="form-control" placeholder="Search by number or name...">
+          </div>
+          <div class="col-md-4 d-flex align-items-center">
+            <span id="songResultCount" style="font-weight:bold;"></span>
+          </div>
+        </div>
+        <div id="song-library-table-scroll" style="overflow:auto;border:1px solid #eee;border-radius:6px;background:#fff;">
+          <div id="song-library-table-container">
+            <div class="text-center text-muted">Loading songs...</div>
+          </div>
+        </div>
+        <div style="height:20px;"></div>
+      </div>
+      <div class="tab-pane fade" id="upcoming-songs" role="tabpanel" aria-labelledby="upcoming-songs-tab">
+        <div class="alert alert-info">Upcoming Songs coming soon.</div>
+      </div>
+      <div class="tab-pane fade" id="admin" role="tabpanel" aria-labelledby="admin-tab">
+        <h1>Sunday PowerPoints</h1>
+        <div id="template-card" class="mb-4"></div>
+        <button class="btn btn-primary mb-3 me-2" id="foldersOnlyBtn" data-bs-toggle="modal" data-bs-target="#runModal">Create Folders</button>
+        <button class="btn btn-secondary mb-3" id="copyTemplateBtn" data-bs-toggle="modal" data-bs-target="#runModal">Copy Template</button>
+        <!-- Modal -->
+        <div class="modal fade" id="runModal" tabindex="-1" aria-labelledby="runModalLabel" aria-hidden="true">
+          <div class="modal-dialog">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="runModalLabel">Create Folders for Sundays</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
-              <div class="mb-3">
-                <label for="yearInput" class="form-label">Year</label>
-                <input type="number" class="form-control" id="yearInput" min="2000" max="2100" required>
+              <div class="modal-body">
+                <form id="runForm">
+                  <div class="mb-3">
+                    <label for="monthInput" class="form-label">Month</label>
+                    <select class="form-select" id="monthInput" required>
+                      <option value="1">January</option>
+                      <option value="2">February</option>
+                      <option value="3">March</option>
+                      <option value="4">April</option>
+                      <option value="5">May</option>
+                      <option value="6">June</option>
+                      <option value="7">July</option>
+                      <option value="8">August</option>
+                      <option value="9">September</option>
+                      <option value="10">October</option>
+                      <option value="11">November</option>
+                      <option value="12">December</option>
+                    </select>
+                  </div>
+                  <div class="mb-3">
+                    <label for="yearInput" class="form-label">Year</label>
+                    <input type="number" class="form-control" id="yearInput" min="2000" max="2100" required>
+                  </div>
+                  <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" id="writeInput">
+                    <label class="form-check-label" for="writeInput">Write (actually create folders/files)</label>
+                  </div>
+                  <button type="submit" class="btn btn-success">Run</button>
+                </form>
+                <div id="runResult" class="mt-3"></div>
               </div>
-              <div class="form-check mb-3">
-                <input class="form-check-input" type="checkbox" id="writeInput">
-                <label class="form-check-label" for="writeInput">Write (actually create folders/files)</label>
+            </div>
+          </div>
+        </div>
+        <!-- Notes Modal -->
+        <div class="modal fade" id="notesModal" tabindex="-1" aria-labelledby="notesModalLabel" aria-hidden="true">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="notesModalLabel">Notes for <span id="notesModalDate"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
-              <button type="submit" class="btn btn-success">Run</button>
-            </form>
-            <div id="runResult" class="mt-3"></div>
+              <div class="modal-body">
+                <textarea id="notesModalText" class="form-control" rows="12" style="font-family:monospace;"></textarea>
+                <div id="notesModalStatus" class="mt-2"></div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="notesModalSaveBtn">Save</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-    <!-- Notes Modal -->
-    <div class="modal fade" id="notesModal" tabindex="-1" aria-labelledby="notesModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title" id="notesModalLabel">Notes for <span id="notesModalDate"></span></h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-          </div>
-          <div class="modal-body">
-            <textarea id="notesModalText" class="form-control" rows="12" style="font-family:monospace;"></textarea>
-            <div id="notesModalStatus" class="mt-2"></div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            <button type="button" class="btn btn-primary" id="notesModalSaveBtn">Save</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <!-- Main content goes here -->
   </div>
-  <aside class="sidebar">
+  <aside class="sidebar bg-body">
     <h5 class="mb-3">Output Folders</h5>
     <ul id="folder-list" class="list-group"></ul>
   </aside>
@@ -328,6 +398,186 @@
         });
       };
     }
+
+    // SONG LIBRARY TAB: Fetch and render songs table
+    let allSongs = [];
+    function renderSongsTable(songs) {
+      // Add sortable headers
+      let html = `<table class='table table-striped table-bordered' id='songTable'><thead><tr>` +
+        `<th class='sortable' data-sort='number'>Song Number</th>` +
+        `<th class='sortable' data-sort='name'>Song Name</th>` +
+        `<th class='sortable' data-sort='book'>Book/Source</th>` +
+        `<th class='sortable' data-sort='lastModified'>Last Modified</th>` +
+        `</tr></thead><tbody>`;
+      songs.forEach(song => {
+        html += `<tr><td>${song.number || ''}</td><td>${song.name}</td><td>${song.book || ''}</td><td>${song.lastModified || ''}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+      document.getElementById('song-library-table-container').innerHTML = html;
+
+      // Add sorting logic
+      const table = document.getElementById('songTable');
+      let sortState = renderSongsTable.sortState || { key: null, asc: true };
+      const getCellValue = (tr, idx) => tr.children[idx].textContent || '';
+      const compare = (a, b, type) => {
+        if (type === 'number') {
+          const na = parseInt(a) || 0, nb = parseInt(b) || 0;
+          return na - nb;
+        } else if (type === 'lastModified') {
+          // Try to parse as date
+          return new Date(a) - new Date(b);
+        } else {
+          return a.localeCompare(b);
+        }
+      };
+      table.querySelectorAll('th.sortable').forEach((th, idx) => {
+        th.style.cursor = 'pointer';
+        th.onclick = function() {
+          const key = th.getAttribute('data-sort');
+          const type = key === 'number' ? 'number' : (key === 'lastModified' ? 'lastModified' : 'string');
+          const tbody = table.querySelector('tbody');
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const colIdx = idx;
+          const asc = sortState.key === key ? !sortState.asc : true;
+          rows.sort((a, b) => {
+            const va = getCellValue(a, colIdx);
+            const vb = getCellValue(b, colIdx);
+            return asc ? compare(va, vb, type) : compare(vb, va, type);
+          });
+          rows.forEach(row => tbody.appendChild(row));
+          // Update sort state and add sort indicator
+          sortState = { key, asc };
+          renderSongsTable.sortState = sortState;
+          table.querySelectorAll('th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
+          th.classList.add(asc ? 'sorted-asc' : 'sorted-desc');
+        };
+      });
+      // Add sort indicator CSS
+      if (!document.getElementById('sortableTableStyle')) {
+        const style = document.createElement('style');
+        style.id = 'sortableTableStyle';
+        style.textContent = `
+          th.sortable.sorted-asc:after { content: " ▲"; }
+          th.sortable.sorted-desc:after { content: " ▼"; }
+        `;
+        document.head.appendChild(style);
+      }
+    }
+    function updateSongBookFilter(songs) {
+      const select = document.getElementById('songBookFilter');
+      // Count songs by book/source, but exclude any with book 'files', 'songtemplate.pptx', or any book that matches a file (not a folder)
+      const bookCounts = {};
+      songs.forEach(s => {
+        if (
+          s.book &&
+          s.book.toLowerCase() !== 'files' &&
+          s.book.toLowerCase() !== 'songtemplate.pptx' &&
+          s.book.toLowerCase() !== 'new song captures' &&
+          !s.book.toLowerCase().endsWith('.pptx') &&
+          !s.book.toLowerCase().endsWith('.txt') &&
+          !s.book.toLowerCase().endsWith('.pdf') &&
+          !s.book.toLowerCase().includes('.') // crude: skip any book with a dot (likely a file)
+        ) {
+          bookCounts[s.book] = (bookCounts[s.book] || 0) + 1;
+        }
+      });
+      const books = Object.keys(bookCounts).sort();
+      select.innerHTML = '<option value="">All Books/Sources (' + songs.length + ')</option>' +
+        books.map(b => `<option value="${b}">${b} (${bookCounts[b]})</option>`).join('');
+    }
+    function filterAndRenderSongs() {
+      let book = document.getElementById('songBookFilter').value;
+      const search = document.getElementById('songSearchInput').value.trim().toLowerCase();
+      let filtered = allSongs;
+      // Robustly exclude template song regardless of backend parsing
+      filtered = filtered.filter(s => {
+        const num = (s.number || '').toString().trim();
+        const name = (s.name || '').toLowerCase();
+        const filename = (s.filename || '').toLowerCase();
+        // Exclude if number is '000', or name/filename contains both '000' and 'template', or name is 'song template'
+        if (num === '000') return false;
+        if (name === 'song template') return false;
+        if ((name.includes('000') && name.includes('template')) || (filename.includes('000') && filename.includes('template'))) return false;
+        return true;
+      });
+      if (book) filtered = filtered.filter(s => s.book === book);
+      if (search) {
+        filtered = filtered.filter(s =>
+          (s.number && s.number.includes(search)) ||
+          (s.name && s.name.toLowerCase().includes(search))
+        );
+      }
+      renderSongsTable(filtered);
+      // Show count of results in the right column
+      let countSpan = document.getElementById('songResultCount');
+      if (countSpan) {
+        countSpan.textContent = `Results: ${filtered.length}`;
+      }
+    }
+    function fetchAndRenderSongs() {
+      const container = document.getElementById('song-library-table-container');
+      container.innerHTML = `<div class='text-center text-muted'>Loading songs...</div>`;
+      fetch('/api/songs')
+        .then(res => res.json())
+        .then(data => {
+          if (!Array.isArray(data)) {
+            container.innerHTML = `<div class='alert alert-danger'>${data.error || 'Failed to load songs.'}</div>`;
+            return;
+          }
+          allSongs = data;
+          updateSongBookFilter(allSongs);
+          filterAndRenderSongs();
+        })
+        .catch(() => {
+          container.innerHTML = `<div class='alert alert-danger'>Failed to load songs.</div>`;
+        });
+    }
+    document.getElementById('songBookFilter').addEventListener('change', filterAndRenderSongs);
+    document.getElementById('songSearchInput').addEventListener('input', filterAndRenderSongs);
+    document.getElementById('song-library-tab').addEventListener('shown.bs.tab', fetchAndRenderSongs);
+    if (document.getElementById('song-library').classList.contains('show') && document.getElementById('song-library').classList.contains('active')) {
+      fetchAndRenderSongs();
+    }
+  </script>
+  <script>
+    // THEME TOGGLE LOGIC
+    (function() {
+      const themeSelect = document.getElementById('themeToggle');
+      // Load saved theme or default to system
+      function getSavedTheme() {
+        return localStorage.getItem('theme-mode') || 'system';
+      }
+      function getSystemTheme() {
+        return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      function applyTheme(theme) {
+        const html = document.documentElement;
+        if (theme === 'light' || theme === 'dark') {
+          html.setAttribute('data-bs-theme', theme);
+        } else {
+          // system: set to current system theme
+          html.setAttribute('data-bs-theme', getSystemTheme());
+        }
+      }
+      function setTheme(theme) {
+        localStorage.setItem('theme-mode', theme);
+        applyTheme(theme);
+      }
+      // On load
+      const saved = getSavedTheme();
+      themeSelect.value = saved;
+      applyTheme(saved);
+      // On change
+      themeSelect.addEventListener('change', function() {
+        setTheme(this.value);
+      });
+      // Listen for system theme changes if in system mode
+      if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+          if (getSavedTheme() === 'system') applyTheme('system');
+        });
+      }
+    })();
   </script>
 </body>
 </html>

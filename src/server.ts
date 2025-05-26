@@ -13,7 +13,8 @@ const config = {
   ext: process.env.EXT || 'pptx',
   templateDirectory: process.env.TEMPLATE_DIRECTORY || '/input',
   outputDirectory: process.env.OUTPUT_DIRECTORY || '/output',
-  rootPath: process.env.ROOT_PATH || '%OneDriveConsumer%'
+  rootPath: process.env.ROOT_PATH || '%OneDriveConsumer%',
+  songsDirectory: process.env.SONGS_DIRECTORY || 'P:/songs' // default to P:/songs, fallback to /songs if not set
 };
 
 if (!config.templateFile) {
@@ -292,6 +293,46 @@ app.post('/api/notes', function(req: any, res: any) {
       });
     })
     .catch(() => res.status(404).send('Folder not found'));
+});
+
+// API endpoint to list songs in songsDirectory
+app.get('/api/songs', async (req: Request, res: Response) => {
+  const songsDir = config.songsDirectory;
+  let songFiles: { name: string, number?: string, book?: string, lastModified?: string }[] = [];
+  const ext = '.' + (config.ext || 'pptx').toLowerCase();
+  async function walk(dir: string, relBase: string = '') {
+    let files: string[] = [];
+    try {
+      files = await fs.promises.readdir(dir);
+    } catch (err) {
+      return;
+    }
+    for (const f of files) {
+      const fullPath = path.join(dir, f);
+      const relPath = relBase ? path.join(relBase, f) : f;
+      let stat;
+      try {
+        stat = await fs.promises.stat(fullPath);
+      } catch { continue; }
+      if (stat.isDirectory()) {
+        await walk(fullPath, relPath);
+      } else if (f.toLowerCase().endsWith(ext)) {
+        // Extract song number if filename starts with exactly 3 digits, optionally followed by space or dash
+        // Example: 123 - Song Name.pptx or 123- Song Name.pptx or 123-Name.pptx
+        const match = f.match(/^(\d{3})\s*-?\s*/);
+        const number = match ? match[1] : undefined;
+        // Book/source is the top-level folder (first part of relPath)
+        const book = relPath.split(path.sep)[0];
+        // Remove number and extension from name
+        let name = f.replace(/^(\d{3})\s*-?\s*/, '').replace(new RegExp(ext + '$', 'i'), '');
+        // Format last modified date
+        const lastModified = stat.mtime.toLocaleString();
+        songFiles.push({ name, number, book, lastModified });
+      }
+    }
+  }
+  await walk(songsDir);
+  res.json(songFiles);
 });
 
 // Serve index.html for root
