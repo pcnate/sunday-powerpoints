@@ -15,29 +15,45 @@
       width: 300px;
       height: 100vh;
       border-left: 1px solid #dee2e6;
-      padding: 2rem 1rem 1rem 1rem;
+      padding: 2rem 0 1rem 1rem; /* Remove right padding, keep left */
       overflow-y: auto;
       box-shadow: -2px 0 8px rgba(0,0,0,0.03);
     }
     .main-content {
       margin-right: 320px;
       padding-left: 1rem;
-      padding-right: 1rem;
+      padding-right: 0; /* Remove right padding */
       padding-top: 0;
       padding-bottom: 0;
     }
     @media (max-width: 900px) {
-      .sidebar { position: static; width: 100%; height: auto; border-left: none; box-shadow: none; }
-      .main-content { margin-right: 0; }
+      .sidebar { position: static; width: 100%; height: auto; border-left: none; box-shadow: none; padding-right: 0; }
+      .main-content { margin-right: 0; padding-right: 0; }
     }
     #song-library-table-scroll {
       overflow: auto;
       border: 1px solid #eee;
       border-radius: 6px;
       background: #fff;
+      height: calc(100vh - 119px - 1rem); /* Updated as requested */
+      min-height: 120px;
+      margin-bottom: 1rem;
+      transition: height 0.2s;
+    }
+    @media (max-width: 900px) {
+      #song-library-table-scroll {
+        height: calc(100vh - 119px);
+        margin-bottom: 0;
+      }
     }
     #song-library-table-scroll table {
       margin-bottom: 0;
+    }
+    #song-library-table-scroll thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--bs-body-bg, #fff);
     }
     /* Sticky tab bar and search row */
     #mainTab {
@@ -76,7 +92,6 @@
     </ul>
     <div class="tab-content" id="mainTabContent">
       <div class="tab-pane fade show active" id="song-library" role="tabpanel" aria-labelledby="song-library-tab">
-        <h2>Song Library</h2>
         <div class="row mb-2 bg-body">
           <div class="col-md-4">
             <select id="songBookFilter" class="form-select">
@@ -95,13 +110,11 @@
             <div class="text-center text-muted">Loading songs...</div>
           </div>
         </div>
-        <div style="height:20px;"></div>
       </div>
       <div class="tab-pane fade" id="upcoming-songs" role="tabpanel" aria-labelledby="upcoming-songs-tab">
         <div class="alert alert-info">Upcoming Songs coming soon.</div>
       </div>
       <div class="tab-pane fade" id="admin" role="tabpanel" aria-labelledby="admin-tab">
-        <h1>Sunday PowerPoints</h1>
         <div id="template-card" class="mb-4"></div>
         <button class="btn btn-primary mb-3 me-2" id="foldersOnlyBtn" data-bs-toggle="modal" data-bs-target="#runModal">Create Folders</button>
         <button class="btn btn-secondary mb-3" id="copyTemplateBtn" data-bs-toggle="modal" data-bs-target="#runModal">Copy Template</button>
@@ -578,6 +591,67 @@
         });
       }
     })();
+  </script>
+  <script>
+    // DEV MODE: Hot reload if webapp files change
+    (function() {
+      // Only run in dev mode (served from localhost or 127.0.0.1)
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        // Add a reload overlay element
+        const reloadDiv = document.createElement('div');
+        reloadDiv.id = 'hot-reload-overlay';
+        reloadDiv.style.cssText = 'display:none;position:fixed;z-index:9999;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.35);color:#fff;font-size:2rem;align-items:center;justify-content:center;text-align:center;backdrop-filter:blur(2px);transition:opacity 0.2s;';
+        reloadDiv.innerHTML = '<div style="margin:auto;padding:2em 2em;background:rgba(30,30,30,0.85);border-radius:12px;box-shadow:0 2px 16px #0008;display:inline-block;">Webapp updated!<br><span style="font-size:1.2rem;">Refreshing...</span></div>';
+        reloadDiv.style.pointerEvents = 'none';
+        reloadDiv.style.display = 'flex';
+        reloadDiv.style.opacity = '0';
+        document.body.appendChild(reloadDiv);
+        let lastMod = null;
+        setInterval(() => {
+          fetch('/api/webapp-last-modified')
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (!data || !data.lastModified) return;
+              if (!lastMod) {
+                lastMod = data.lastModified;
+              } else if (data.lastModified > lastMod) {
+                // Show overlay, then reload after 1s
+                reloadDiv.style.display = 'flex';
+                setTimeout(() => { reloadDiv.style.opacity = '1'; }, 10);
+                setTimeout(() => { location.reload(); }, 1000);
+              }
+            })
+            .catch(() => {});
+        }, 1000);
+      }
+    })();
+  </script>
+  <!-- NOTE: You must implement the /api/webapp-last-modified endpoint in server.ts to return { lastModified: <ISO string or ms> } for the newest file in the webapp folder. -->
+  <script>
+    // SPA-style tab navigation: update URL hash and restore tab on load/back/forward
+    function setTabFromHash() {
+      const hash = location.hash.replace('#', '');
+      if (!hash) return;
+      const tabBtn = document.querySelector(`[data-bs-target="#${hash}"]`);
+      if (tabBtn) {
+        // Use Bootstrap's tab API to show the tab
+        const tab = new bootstrap.Tab(tabBtn);
+        tab.show();
+      }
+    }
+    // On tab change, update the URL hash
+    document.querySelectorAll('#mainTab button[data-bs-toggle="tab"]').forEach(btn => {
+      btn.addEventListener('shown.bs.tab', function(e) {
+        const target = this.getAttribute('data-bs-target');
+        if (target && target.startsWith('#')) {
+          history.replaceState(null, '', target);
+        }
+      });
+    });
+    // On page load, set tab from hash
+    window.addEventListener('DOMContentLoaded', setTabFromHash);
+    // On back/forward navigation, update tab
+    window.addEventListener('popstate', setTabFromHash);
   </script>
 </body>
 </html>

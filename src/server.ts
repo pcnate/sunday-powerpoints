@@ -36,9 +36,11 @@ if (process.env.NODE_ENV === 'development') {
 const app = express();
 app.use(express.json());
 
-// Log all /api requests
+// Log all /api requests, except /api/webapp-last-modified
 app.use('/api', (req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  if (req.originalUrl !== '/api/webapp-last-modified') {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  }
   next();
 });
 
@@ -333,6 +335,41 @@ app.get('/api/songs', async (req: Request, res: Response) => {
   }
   await walk(songsDir);
   res.json(songFiles);
+});
+
+// Track server start time
+const serverStartTime = Date.now();
+
+// API endpoint to get the last modified date of the newest file in the webapp folder (for hot reload in dev)
+app.get('/api/webapp-last-modified', async (req: Request, res: Response) => {
+  const webappDir = path.join(__dirname, 'webapp');
+  let latest = 0;
+  async function walk(dir: string) {
+    let files: string[] = [];
+    try {
+      files = await fs.promises.readdir(dir);
+    } catch { return; }
+    for (const f of files) {
+      const fullPath = path.join(dir, f);
+      let stat;
+      try {
+        stat = await fs.promises.stat(fullPath);
+      } catch { continue; }
+      if (stat.isDirectory()) {
+        await walk(fullPath);
+      } else {
+        if (stat.mtimeMs > latest) latest = stat.mtimeMs;
+      }
+    }
+  }
+  await walk(webappDir);
+  // Use serverStartTime if it is newer than any file
+  if (serverStartTime > latest) latest = serverStartTime;
+  if (latest > 0) {
+    res.json({ lastModified: latest, serverStarted: serverStartTime });
+  } else {
+    res.status(404).json({ error: 'No files found', serverStarted: serverStartTime });
+  }
 });
 
 // Serve index.html for root
