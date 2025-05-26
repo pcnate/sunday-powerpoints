@@ -4,10 +4,11 @@
  2. ~~add folder creation mode~~
  3. ~~add a server.ts that accepts env options as described below~~
  4. ~~add a web server to the server~~
- 5. add semantic-release automation for releases
- 6. convert to docker (if possible)
- 7. add bible verse extraction API endpoint
- 8. add bible verse update API endpoint
+ 5. add song selection for each week by month
+ 6. add semantic-release automation for releases
+ 7. convert to docker (if possible)
+ 8. add bible verse extraction API endpoint
+ 9. add bible verse update API endpoint
 
 ## Convert to TypeScript
 Convert the entire project into TypeScript to ease coding complexity
@@ -50,6 +51,25 @@ Set up automated releases using semantic-release for the project. The release pr
 
 This ensures a robust, automated release workflow without exposing the package to the public npm registry.
 
+## song selection
+
+### user story
+ 1. I wish to choose the songs for each sunday of a selected month. Each sunday can have any number of choruses and 3 songs. I wish to select from a searchable dropdown all songs in the library for song 1-3. I want to add and select each chorus above the 3 songs.
+ 2. When a week is saved, it should create a shortcut to that song in the weeks folder (create the folder if necessary) where the name should be `${ 'song' or 'chorus' }$ ${ n } - ${ targetFileName }`. Create a JSON file in that folder that has each songs name and an unpopulated field for the CCLI license that we will implement someday.
+
+### structure
+ 1. select a month
+ 2. have 4-5 columns (on desktop) that have a list of songs for each week
+ 3. on mobile, a week selection should be included
+
+## semantic-release
+ 1. generate releases from main, master or development branches
+ 2. do not publish npm package
+ 3. ensure if any publishing, that it is private
+ 4. development branch creates a release candidated version number systax 1.2.3-RC.1
+ 5. set a boolean output for the semantic-release job that flags whether a release was created
+ 6. set an output for the semantic-release job that contains the version number being created. this will be used for publishing to GHCR etc.
+
 ## dockerization
  1. determine if the windows-shortcuts dependency can run in linux/docker
  2. if #1 works, then add a dockerfile, otherwise abandon the rest of this section
@@ -57,6 +77,7 @@ This ensures a robust, automated release workflow without exposing the package t
  4. ensure TypeScript (tsc) can build into ./lib using fairly new ecmascript
  5. build the docker file with the intention of publishing as a private container to GitHub Container Registry
  6. The .env file must be excluded from the Docker image (add to .dockerignore in the future)
+ 7. CI, a job should be run after semantic-release completes and detects a new version was created to publish to GHCR and tag it with the semantic-release generated tag
 
 ## Extracting Bible Verse Text from Template PPTX
 
