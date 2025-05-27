@@ -655,6 +655,36 @@ schedule.scheduleJob('0 0 * * 1', async function() {
   }
 });
 
+// --- SCHEDULED JOB: Rename .thm files to .jpeg every minute on Sundays ---
+schedule.scheduleJob('* * * * *', async function() {
+  const now = new Date();
+  // Only run on Sundays
+  if (now.getDay() !== 0) return;
+  const outputDir = config.outputDirectory;
+  try {
+    const folders = await fs.promises.readdir(outputDir, { withFileTypes: true });
+    for (const entry of folders) {
+      if (!entry.isDirectory()) continue;
+      const weekFolder = path.join(outputDir, entry.name, 'Vids');
+      if (!fs.existsSync(weekFolder)) continue;
+      const files = await fs.promises.readdir(weekFolder);
+      for (const file of files) {
+        if (file.toLowerCase().endsWith('.thm')) {
+          const thmPath = path.join(weekFolder, file);
+          const jpegPath = path.join(weekFolder, file.replace(/\.thm$/i, '.jpeg'));
+          // Only rename if .jpeg does not already exist
+          if (!fs.existsSync(jpegPath)) {
+            await fs.promises.rename(thmPath, jpegPath);
+            console.log(`[THUMBNAIL] Renamed '${thmPath}' to '${jpegPath}'`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[THUMBNAIL] Error during .thm to .jpeg scan:', e);
+  }
+});
+
 const PORT = 80;
 app.listen(PORT, () => {
   console.log(`Web server listening on port ${PORT}`);
