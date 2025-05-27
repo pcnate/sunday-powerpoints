@@ -4,7 +4,7 @@
  2. ~~add folder creation mode~~
  3. ~~add a server.ts that accepts env options as described below~~
  4. ~~add a web server to the server~~
- 5. add song selection for each week by month
+ 5. ~~add song selection for each week by month~~
  6. add semantic-release automation for releases
  7. convert to docker (if possible)
  8. add bible verse extraction API endpoint

@@ -112,7 +112,12 @@
         </div>
       </div>
       <div class="tab-pane fade" id="upcoming-songs" role="tabpanel" aria-labelledby="upcoming-songs-tab">
-        <div class="alert alert-info">Upcoming Songs coming soon.</div>
+        <div class="mb-3 d-flex flex-wrap align-items-center gap-2">
+          <label for="songMonthPicker" class="form-label mb-0">Select Month:</label>
+          <select id="songMonthPicker" class="form-select" style="width:auto;"></select>
+        </div>
+        <div id="song-selection-weeks" class="row flex-wrap" style="gap:1rem;"></div>
+        <div id="song-selection-status" class="mt-3"></div>
       </div>
       <div class="tab-pane fade" id="admin" role="tabpanel" aria-labelledby="admin-tab">
         <div id="template-card" class="mb-4"></div>
@@ -652,6 +657,412 @@
     window.addEventListener('DOMContentLoaded', setTabFromHash);
     // On back/forward navigation, update tab
     window.addEventListener('popstate', setTabFromHash);
+  </script>
+  <script>
+    // --- SONG SELECTION BY WEEK/MONTH LOGIC ---
+    // Helper: get all Sundays in a month
+    function getSundaysInMonth(year, month) {
+      const sundays = [];
+      const date = new Date(year, month - 1, 1);
+      while (date.getMonth() === month - 1) {
+        if (date.getDay() === 0) sundays.push(new Date(date));
+        date.setDate(date.getDate() + 1);
+      }
+      return sundays;
+    }
+    // Helper: get month options (last 2, current, next 6)
+    function getMonthOptions() {
+      const now = new Date();
+      let baseMonth = now.getMonth() + 1;
+      let baseYear = now.getFullYear();
+      // If after 15th, default to next month
+      let defaultMonth = baseMonth;
+      let defaultYear = baseYear;
+      if (now.getDate() > 15) {
+        if (baseMonth === 12) {
+          defaultMonth = 1;
+          defaultYear++;
+        } else {
+          defaultMonth++;
+        }
+      }
+      const options = [];
+      // Last 2 months
+      for (let i = -2; i <= 6; i++) {
+        let m = baseMonth + i;
+        let y = baseYear;
+        while (m < 1) { m += 12; y--; }
+        while (m > 12) { m -= 12; y++; }
+        options.push({
+          value: `${y}-${String(m).padStart(2, '0')}`,
+          label: `${new Date(y, m - 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })}`,
+          isDefault: (m === defaultMonth && y === defaultYear)
+        });
+      }
+      return options;
+    }
+    // Render month dropdown
+    function renderMonthDropdown() {
+      const select = document.getElementById('songMonthPicker');
+      const options = getMonthOptions();
+      select.innerHTML = options.map(opt => `<option value="${opt.value}"${opt.isDefault ? ' selected' : ''}>${opt.label}</option>`).join('');
+    }
+    // Render week columns for selected month
+    function renderSongSelectionWeeks(year, month) {
+      const sundays = getSundaysInMonth(year, month);
+      const container = document.getElementById('song-selection-weeks');
+      container.innerHTML = '';
+      sundays.forEach((sunday, weekIdx) => {
+        const weekNumber = weekIdx + 1;
+        const col = document.createElement('div');
+        col.className = 'col border rounded p-2 bg-body-tertiary mb-3';
+        col.style.minWidth = '260px';
+        col.style.maxWidth = '280px';
+        col.style.flex = '1 1 260px';
+        col.innerHTML = `
+          <div class="fw-bold mb-2">Week ${weekNumber} &mdash; ${sunday.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+          <div class="mb-2">Choruses:
+            <div id="chorus-list-${weekIdx}"></div>
+            <button class="btn btn-sm btn-outline-primary mt-1" type="button" id="add-chorus-btn-${weekIdx}">+ Add Chorus</button>
+          </div>
+          <div class="mb-2">Songs:
+            <div class="d-grid gap-2" id="song-list-${weekIdx}">
+              <button class="btn btn-outline-secondary" type="button" id="song-btn-${weekIdx}-1">Choose Song 1</button>
+              <button class="btn btn-outline-secondary" type="button" id="song-btn-${weekIdx}-2">Choose Song 2</button>
+              <button class="btn btn-outline-secondary" type="button" id="song-btn-${weekIdx}-3">Choose Song 3</button>
+            </div>
+          </div>
+          <div id="week-status-${weekIdx}" class="mt-1"></div>
+        `;
+        container.appendChild(col);
+      });
+      // Attach modal open handlers for all song/chorus buttons
+      sundays.forEach((_, weekIdx) => {
+        document.getElementById(`add-chorus-btn-${weekIdx}`).onclick = () => openSongSelectModal(weekIdx, 'chorus');
+        for (let i = 1; i <= 3; i++) {
+          document.getElementById(`song-btn-${weekIdx}-${i}`).onclick = () => openSongSelectModal(weekIdx, i);
+        }
+      });
+    }
+
+    // Fetch and render existing song/chorus selections for a given month
+    async function fetchAndApplyWeekSelections(year, month) {
+      try {
+        const res = await fetch(`/api/week-song-selections?year=${year}&month=${month}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        // data: { [weekIdx]: { songs: [song1, song2, song3], choruses: [chorus1, ...] } }
+        Object.entries(data).forEach(([weekIdx, weekData]) => {
+          // Set songs
+          if (weekData.songs) {
+            weekData.songs.forEach((song, i) => {
+              const btn = document.getElementById(`song-btn-${weekIdx}-${i+1}`);
+              if (btn && song) {
+                btn.textContent = songLabel(song);
+                btn.classList.remove('btn-outline-secondary');
+                btn.classList.add('btn-success');
+                // set button tooltip
+                btn.setAttribute('title', `${ songLabel( song ) }`);
+              }
+            });
+          }
+          // Set choruses
+          if (weekData.choruses) {
+            const chorusList = document.getElementById(`chorus-list-${weekIdx}`);
+            if (chorusList) {
+              chorusList.innerHTML = '';
+              weekData.choruses.forEach((chorus, chorusIdx) => {
+                const div = createSongBadge(chorus);
+                chorusList.appendChild(div);
+                div.querySelector('.chorus-delete-btn').onclick = function() {
+                  div.remove();
+                  postChorusList(weekIdx);
+                };
+              });
+            }
+          }
+        });
+      } catch (e) { /* ignore */ }
+    }
+
+    // --- Song/Chorus Selection Modal ---
+    // Modal HTML (insert at end of body if not present)
+    function ensureSongSelectModal() {
+      if (document.getElementById('songSelectModal')) return;
+      const modal = document.createElement('div');
+      modal.innerHTML = `
+        <div class="modal fade" id="songSelectModal" tabindex="-1" aria-labelledby="songSelectModalLabel" aria-hidden="true">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="songSelectModalLabel">Select Song</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <div class="row mb-2">
+                  <div class="col-md-6 mb-2 mb-md-0">
+                    <input id="songSelectSearch" type="text" class="form-control" placeholder="Search by number or name...">
+                  </div>
+                  <div class="col-md-6">
+                    <select id="songSelectBookFilter" class="form-select">
+                      <option value="">All Books/Sources</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="songSelectTableContainer" style="max-height:50vh;overflow:auto;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    // Helper: filter out template and invalid songs for modal
+    function getFilteredSongsForModal() {
+      return allSongs.filter(s => {
+        const num = (s.number || '').toString().trim();
+        const name = (s.name || '').toLowerCase();
+        const filename = (s.filename || '').toLowerCase();
+        const book = (s.book || '').toLowerCase();
+        if (num === '000') return false;
+        if (name === 'song template') return false;
+        if ((name.includes('000') && name.includes('template')) || (filename.includes('000') && filename.includes('template'))) return false;
+        if (filename === 'song template.pptx' || name === 'song template.pptx' || book === 'songtemplate.pptx') return false;
+        return true;
+      });
+    }
+
+    // Helper: get unique books for dropdown
+    function getBooksForModal(songs) {
+      const books = new Set();
+      songs.forEach(s => {
+        if (s.book && s.book.toLowerCase() !== 'files' && s.book.toLowerCase() !== 'songtemplate.pptx' && !s.book.toLowerCase().endsWith('.pptx') && !s.book.toLowerCase().endsWith('.txt') && !s.book.toLowerCase().endsWith('.pdf') && !s.book.toLowerCase().includes('.')) {
+          books.add(s.book);
+        }
+      });
+      return Array.from(books).sort();
+    }
+
+    // Open modal and render song list for selection
+    let songSelectModalInstance = null;
+    let songSelectCallback = null;
+    function openSongSelectModal(weekIdx, slot) {
+      ensureSongSelectModal();
+      const modalEl = document.getElementById('songSelectModal');
+      if (!songSelectModalInstance) songSelectModalInstance = new bootstrap.Modal(modalEl);
+      document.getElementById('songSelectModalLabel').textContent = slot === 'chorus' ? 'Select Chorus' : `Select Song ${slot}`;
+      let modalSongs = getFilteredSongsForModal();
+      const bookSelect = document.getElementById('songSelectBookFilter');
+      const books = getBooksForModal(modalSongs);
+      bookSelect.innerHTML = '<option value="">All Books/Sources</option>' + books.map(b => `<option value="${b}">${b}</option>`).join('');
+      // Restore last selected book filter from localStorage
+      const lastBook = localStorage.getItem('songSelectBookFilter');
+      if (lastBook && books.includes(lastBook)) bookSelect.value = lastBook;
+      // Render table with filter applied if needed
+      const searchInput = document.getElementById('songSelectSearch');
+      searchInput.value = '';
+      function filterModalSongs() {
+        const q = searchInput.value.trim().toLowerCase();
+        const book = bookSelect.value;
+        let filtered = modalSongs;
+        if (book) filtered = filtered.filter(s => s.book === book);
+        if (q) filtered = filtered.filter(s =>
+          (s.number && s.number.toLowerCase().includes(q)) ||
+          (s.name && s.name.toLowerCase().includes(q))
+        );
+        renderSongSelectTable(filtered, weekIdx, slot);
+      }
+      // Apply filter immediately if a book is remembered
+      filterModalSongs();
+      searchInput.oninput = filterModalSongs;
+      bookSelect.onchange = function() {
+        localStorage.setItem('songSelectBookFilter', bookSelect.value);
+        filterModalSongs();
+      };
+      songSelectModalInstance.show();
+      songSelectCallback = (song) => {
+        songSelectModalInstance.hide();
+        handleSongChosen(weekIdx, slot, song);
+      };
+    }
+
+    function renderSongSelectTable(songs, weekIdx, slot) {
+      const container = document.getElementById('songSelectTableContainer');
+      let html = `<table class='table table-sm table-hover'><thead><tr><th>Number</th><th>Name</th><th>Book</th><th></th></tr></thead><tbody>`;
+      songs.forEach(song => {
+        const num = song.number ? `#${song.number}` : '';
+        html += `<tr><td>${num}</td><td>${song.name}</td><td>${song.book || ''}</td><td><button class='btn btn-primary btn-sm' type='button' data-songnum='${song.number || ''}' data-songname='${encodeURIComponent(song.name)}'>Select</button></td></tr>`;
+      });
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+      // Attach select handlers
+      container.querySelectorAll('button[data-songnum]').forEach(btn => {
+        btn.onclick = function() {
+          const num = this.getAttribute('data-songnum');
+          const name = decodeURIComponent(this.getAttribute('data-songname'));
+          const song = allSongs.find(s => s.number == num && s.name == name) || { number: num, name };
+          if (songSelectCallback) songSelectCallback(song);
+        };
+      });
+    }
+
+    // Handle song/chorus chosen: update UI and POST to server (API to be implemented)
+    function handleSongChosen(weekIdx, slot, song) {
+      if (slot === 'chorus') {
+        // Add chorus row to UI (with delete icon)
+        const chorusList = document.getElementById(`chorus-list-${weekIdx}`);
+        const div = createSongBadge( song );
+        chorusList.appendChild(div);
+        // Add delete handler
+        div.querySelector('.chorus-delete-btn').onclick = function() {
+          div.remove();
+          postChorusList(weekIdx);
+        };
+        // POST updated chorus list
+        postChorusList(weekIdx);
+      } else {
+        // Update button label
+        const btn = document.getElementById(`song-btn-${weekIdx}-${slot}`);
+        btn.textContent = songLabel(song);
+        btn.classList.remove('btn-outline-secondary');
+        btn.classList.add('btn-success');
+        btn.setAttribute('title', `${ songLabel( song ) }`);
+        // POST to server (to be implemented)
+        // Compute the date string (YYYYMMDD) for this weekIdx and current month/year
+        const [year, month] = document.getElementById('songMonthPicker').value.split('-').map(Number);
+        const sundays = getSundaysInMonth(year, month);
+        const sunday = sundays[weekIdx];
+        let date = '';
+        if (sunday) {
+          date = `${sunday.getFullYear()}${String(sunday.getMonth()+1).padStart(2,'0')}${String(sunday.getDate()).padStart(2,'0')}`;
+        }
+        fetch('/api/update-song', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weekIdx, slot, song, date })
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data && data.status) {
+            if (data.status === 'already-correct') showSnackbar('Shortcut already correct.', 'secondary');
+            else if (data.status === 'replaced') showSnackbar('Shortcut replaced.', 'warning');
+            else if (data.status === 'created') showSnackbar('Shortcut created.', 'success');
+            else if (data.status === 'not-found') showSnackbar('Song file not found in library.', 'danger');
+            else if (data.status === 'error') showSnackbar('Error saving shortcut.', 'danger');
+            else showSnackbar('Saved.', 'info');
+          } else {
+            showSnackbar('Saved.', 'info');
+          }
+        })
+        .catch(() => showSnackbar('Error saving shortcut.', 'danger'));
+      }
+    }
+
+    /**
+     * create a badge element for choruses
+     * 
+     * @param {Object} song - The song object containing number, name, and book.
+     * @returns {HTMLElement} - The badge element for the song.
+     */
+    function createSongBadge( song ) {
+      const div = document.createElement( 'div' );
+      div.className = 'mb-2 chorus-row'; // <-- Add chorus-row here
+      // Tooltip: show full name, number, and book
+      let tooltip = '';
+      if (song.number) tooltip += `#${song.number} - `;
+      tooltip += song.name || '';
+      if (song.book) tooltip += `\nBook: ${song.book}`;
+      div.innerHTML = `
+          <span class="badge bg-info text-dark d-flex align-items-center justify-content-between w-100" style="font-size:1.08em; min-height:2.2em; padding:0.7em 1.2em 0.7em 1em; border-radius:0.5em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${tooltip.replace(/"/g, '&quot;')}">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto;min-width:0;">${songLabel(song)}</span>
+            <button type="button" class="btn btn-sm btn-close chorus-delete-btn ms-2" title="Delete" style="filter:invert(0.7);opacity:0.9;flex:0 0 auto;"></button>
+          </span>
+        `;
+      // Store song data for later POST
+      div.dataset.songnum = song.number || '';
+      div.dataset.songname = song.name;
+      div.dataset.songbook = song.book || '';
+      return div;
+    }
+
+    // Helper: POST the full list of choruses for a week
+    function postChorusList(weekIdx) {
+      const chorusList = document.getElementById(`chorus-list-${weekIdx}`);
+      const chorusRows = Array.from(chorusList.querySelectorAll('.chorus-row'));
+      const choruses = chorusRows.map(div => {
+        return {
+          number: div.dataset.songnum || undefined,
+          name: div.dataset.songname,
+          book: div.dataset.songbook || undefined
+        };
+      });
+      const [ year, month ] = document.getElementById( 'songMonthPicker' ).value.split( '-' ).map( Number );
+      const sundays = getSundaysInMonth( year, month );
+      const sunday = sundays[ weekIdx ];
+      let date = '';
+      if ( sunday ) {
+        date = `${sunday.getFullYear()}${String( sunday.getMonth() + 1 ).padStart( 2, '0' )}${String( sunday.getDate() ).padStart( 2, '0' )}`;
+      }
+      fetch('/api/chorus-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weekIdx, slot: 'choruses', choruses, date })
+      });
+    }
+    // --- END OF SONG SELECTION LOGIC ---
+    // Initial render
+    (function initSongSelectionTab() {
+      renderMonthDropdown();
+      document.getElementById('songMonthPicker').addEventListener('change', handleMonthChange);
+      handleMonthChange();
+      ensureSongSelectModal();
+    })();
+    // Month dropdown event
+    function handleMonthChange() {
+      const [year, month] = document.getElementById('songMonthPicker').value.split('-').map(Number);
+      renderSongSelectionWeeks(year, month);
+      fetchAndApplyWeekSelections(year, month); // <-- Load selections after rendering weeks
+    }
+    // Helper: get song label without file extension
+    function songLabel(song) {
+      // Remove file extension from name if present
+      let name = song.name || '';
+      // Remove trailing .pptx, .ppt, .lnk, .txt, .pdf, etc. (case-insensitive)
+      name = name.replace(/\.(pptx?|lnk|txt|pdf)$/i, '');
+      // Remove trailing ' - Shortcut' if present
+      name = name.replace(/ - Shortcut$/i, '');
+      // Remove leading/trailing whitespace
+      name = name.trim();
+      // Remove leading # from number if present
+      let number = song.number || '';
+      if (typeof number === 'string' && number.startsWith('#')) number = number.slice(1);
+      // Only add # if number is present and not already in name
+      let label = '';
+      if (number) {
+        label = `#${number} - ${name}`;
+      } else {
+        label = name;
+      }
+      return label;
+    }
+  </script>
+  <!-- Add a Bootstrap toast/snackbar for song selection status -->
+  <div id="snackbar-container" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;"></div>
+  <script>
+    function showSnackbar(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.className = `toast align-items-center text-bg-${type} border-0 show`;
+      toast.role = 'alert';
+      toast.ariaLive = 'assertive';
+      toast.ariaAtomic = 'true';
+      toast.style.minWidth = '220px';
+      toast.style.fontSize = '1.1em';
+      toast.innerHTML = `<div class="d-flex"><div class="toast-body">${message}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>`;
+      document.getElementById('snackbar-container').appendChild(toast);
+      setTimeout(() => { toast.classList.remove('show'); toast.remove(); }, 3500);
+      toast.querySelector('.btn-close').onclick = () => toast.remove();
+    }
   </script>
 </body>
 </html>

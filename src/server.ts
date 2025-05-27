@@ -4,6 +4,7 @@ import * as dotenv from 'dotenv';
 import fs from 'fs';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 const schedule = require('node-schedule');
+import { createShortcut } from './sunday-powerpoints';
 
 dotenv.config();
 
@@ -335,6 +336,251 @@ app.get('/api/songs', async (req: Request, res: Response) => {
   }
   await walk(songsDir);
   res.json(songFiles);
+});
+
+// --- SONG SELECTION API ENDPOINTS ---
+// Returns song/chorus selections for each week in a given month
+app.get('/api/week-song-selections', (req: Request, res: Response) => {
+  (async () => {
+    try {
+      const year = parseInt((req.query.year as string) || '');
+      const month = parseInt((req.query.month as string) || '');
+      if (!year || !month) return res.status(400).json({ error: 'Missing year or month' });
+      // Get all Sundays in the month
+      function getSundaysInMonth(year: number, month: number) {
+        const sundays: Date[] = [];
+        const date = new Date(year, month - 1, 1);
+        while (date.getMonth() === month - 1) {
+          if (date.getDay() === 0) sundays.push(new Date(date));
+          date.setDate(date.getDate() + 1);
+        }
+        return sundays;
+      }
+      const sundays = getSundaysInMonth(year, month);
+      const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+      const fs = require('fs');
+      const path = require('path');
+      // For each week, try to find song shortcuts and chorus info
+      const result: Record<string, { songs: any[]; choruses: any[] }> = {};
+      for (let weekIdx = 0; weekIdx < sundays.length; weekIdx++) {
+        const sunday = sundays[weekIdx];
+        // Folder name: YYYYMMDD
+        const folderName = `${sunday.getFullYear()}${String(sunday.getMonth()+1).padStart(2,'0')}${String(sunday.getDate()).padStart(2,'0')}`;
+        const weekFolder = path.join(outputDir, folderName);
+        const songs: (null | { number?: string; name: string })[] = [null, null, null];
+        let choruses: any[] = [];
+        if (fs.existsSync(weekFolder)) {
+          // Find song shortcuts: song 1, song 2, song 3
+          const files = fs.readdirSync(weekFolder);
+          for (let i = 1; i <= 3; i++) {
+            // Regex: song <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
+            // Examples:
+            //   song 1 203 - Tell Me the Story of Jesus - Shortcut.lnk
+            //   song 2 203 Tell Me the Story of Jesus.lnk
+            //   song 3 Tell Me the Story of Jesus - Shortcut.lnk
+            //   song 1 203- Tell Me the Story of Jesus.lnk
+            //   song 1 203 -Tell Me the Story of Jesus.lnk
+            //   song 1 Tell Me the Story.lnk
+            const shortcut = files.find((f: string) => f.toLowerCase().startsWith(`song ${i} `) && f.toLowerCase().endsWith('.lnk'));
+            if (shortcut) {
+              const re = /^song\s+(?<slot>\d+)\s+(?:(?<number>\d{3})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
+              const match = shortcut.match(re);
+              if (match && match.groups) {
+                let name = match.groups.name.trim();
+                // Remove any trailing file extension or ' - Shortcut' if present (shouldn't be, but just in case)
+                name = name.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
+                if (match.groups.number) {
+                  songs[i-1] = { number: match.groups.number, name };
+                } else {
+                  songs[i-1] = { name };
+                }
+              } else {
+                // fallback: just use the rest of the name
+                let rest = shortcut.replace(/^song \d+ /i, '').replace(/\.lnk$/i, '');
+                rest = rest.replace(/ - Shortcut$/i, '').trim();
+                songs[i-1] = { name: rest };
+              }
+            }
+          }
+          // --- CHORUS SHORTCUTS ---
+          // Detect chorus shortcuts: chorus 1, chorus 2, etc.
+          for (let c = 1; c <= 10; c++) { // support up to 10 choruses per week
+            const chorusShortcut = files.find((f: string) => f.toLowerCase().startsWith(`chorus ${c} `) && f.toLowerCase().endsWith('.lnk'));
+            if (chorusShortcut) {
+              // Regex: chorus <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
+              // Examples:
+              //   chorus 1 10,000 Reasons.pptx - Shortcut.lnk
+              //   chorus 2 123 - Name.lnk
+              //   chorus 3 Name - Shortcut.lnk
+              //   chorus 1 123- Name.lnk
+              //   chorus 1 123 -Name.lnk
+              //   chorus 1 Name.lnk
+              const re = /^chorus\s+(?<slot>\d+)\s+(?:(?<number>\d{1,5})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
+              const match = chorusShortcut.match(re);
+              if (match && match.groups) {
+                let name = match.groups.name.trim();
+                // Remove any trailing file extension or ' - Shortcut' if present
+                name = name.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
+                let chorusObj: any = { name };
+                if (match.groups.number) chorusObj.number = match.groups.number;
+                choruses.push(chorusObj);
+              } else {
+                // fallback: just use the rest of the name
+                let rest = chorusShortcut.replace(/^chorus \d+ /i, '').replace(/\.lnk$/i, '');
+                rest = rest.replace(/ - Shortcut$/i, '').trim();
+                choruses.push({ name: rest });
+              }
+            }
+          }
+          // Try to load choruses.json if present
+          const chorusJson = path.join(weekFolder, 'choruses.json');
+          if (fs.existsSync(chorusJson)) {
+            try {
+              const chorusData = JSON.parse(fs.readFileSync(chorusJson, 'utf8'));
+              if (Array.isArray(chorusData)) choruses = chorusData;
+            } catch {}
+          }
+        }
+        result[String(weekIdx)] = { songs, choruses };
+      }
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to load week selections' });
+    }
+  })();
+});
+
+// --- SHARED HELPERS FOR SONG/CHORUS SHORTCUTS ---
+function findSongFile(song: any, songsDirectory: string): string | null {
+  const walk = (dir: string): string | null => {
+    const files = fs.readdirSync(dir);
+    for (const f of files) {
+      const full = path.join(dir, f);
+      if (fs.statSync(full).isDirectory()) {
+        const found = walk(full);
+        if (found) return found;
+      } else {
+        let base = f.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
+        if (song.number) {
+          if (f.startsWith(song.number) && base.includes(song.name)) return full;
+        } else {
+          if (base === song.name) return full;
+        }
+      }
+    }
+    return null;
+  };
+  return walk(songsDirectory);
+}
+
+function deleteShortcutsByPrefix(folder: string, prefix: string) {
+  const files = fs.readdirSync(folder);
+  const shortcuts = files.filter(f => f.toLowerCase().startsWith(prefix) && f.toLowerCase().endsWith('.lnk'));
+  for (const shortcut of shortcuts) {
+    fs.unlinkSync(path.join(folder, shortcut));
+    console.log(`[SHORTCUT] Deleted shortcut '${shortcut}' in folder ${folder}`);
+  }
+}
+
+// --- SONG SELECTION API ENDPOINT (renamed) ---
+app.post('/api/update-song', (req: Request, res: Response) => {
+  (async () => {
+    try {
+      const { weekIdx, slot, song, date } = req.body || {};
+      if (!date || typeof date !== 'string' || !/^\d{8}$/.test(date)) {
+        return res.status(400).json({ error: 'Missing or invalid date (YYYYMMDD required)' });
+      }
+      let y = parseInt(date.slice(0, 4));
+      let m = parseInt(date.slice(4, 6));
+      let d = parseInt(date.slice(6, 8));
+      const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+      const weekFolder = path.join(outputDir, `${y}${String(m).padStart(2,'0')}${String(d).padStart(2,'0')}`);
+      if (!fs.existsSync(weekFolder)) fs.mkdirSync(weekFolder, { recursive: true });
+      if (slot === 1 || slot === 2 || slot === 3 || slot === '1' || slot === '2' || slot === '3') {
+        const slotNum = Number(slot);
+        deleteShortcutsByPrefix(weekFolder, `song ${slotNum} `);
+        const songFile = findSongFile(song, config.songsDirectory);
+        if (!songFile) {
+          console.log(`[SONG SHORTCUT] Song ${slotNum}: Song file not found in library for ${song.number || ''} ${song.name}`);
+          return res.status(404).json({ error: 'Song file not found in library', status: 'not-found' });
+        }
+        const shortcutName = `song ${slotNum} ${song.number ? song.number + ' - ' : ''}${song.name}`.replace(/[\\/:*?"<>|]/g, '_') + ' - Shortcut.lnk';
+        const shortcutPath = path.join(weekFolder, shortcutName);
+        const desc = `Sunday Song ${slotNum}: ${song.number ? song.number + ' - ' : ''}${song.name}`;
+        const rootPath = config.rootPath;
+        const created = await createShortcut(shortcutPath, desc, songFile, rootPath);
+        let status = 'created';
+        if (!created) {
+          status = 'error';
+          console.error(`[SONG SHORTCUT] Song ${slotNum}: Failed to create shortcut '${shortcutName}' in folder ${weekFolder}`);
+        } else {
+          console.log(`[SONG SHORTCUT] Song ${slotNum}: Created shortcut '${shortcutName}' in folder ${weekFolder}`);
+        }
+        return res.json({ success: true, status });
+      }
+      return res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'Failed to save song selection', status: 'error' });
+    }
+  })();
+});
+
+// --- CHORUS UPDATE API ENDPOINT ---
+app.post('/api/chorus-update', (req: Request, res: Response) => {
+  (async () => {
+    try {
+      const { weekIdx, slot, choruses, date } = req.body || {};
+      if (!date || typeof date !== 'string' || !/^\d{8}$/.test(date)) {
+        return res.status(400).json({ error: 'Missing or invalid date (YYYYMMDD required)' });
+      }
+      let y = parseInt(date.slice(0, 4));
+      let m = parseInt(date.slice(4, 6));
+      let d = parseInt(date.slice(6, 8));
+      const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+      const weekFolder = path.join(outputDir, `${y}${String(m).padStart(2,'0')}${String(d).padStart(2,'0')}`);
+      if (!fs.existsSync(weekFolder)) fs.mkdirSync(weekFolder, { recursive: true });
+      if (slot === 'choruses' && Array.isArray(choruses)) {
+        // Delete all existing chorus shortcuts and log each deletion
+        const deletedChoruses: string[] = [];
+        const files = fs.readdirSync(weekFolder);
+        const chorusShortcuts = files.filter(f => f.toLowerCase().startsWith('chorus ') && f.toLowerCase().endsWith('.lnk'));
+        for (const shortcut of chorusShortcuts) {
+          fs.unlinkSync(path.join(weekFolder, shortcut));
+          console.log(`[SHORTCUT] Deleted shortcut '${shortcut}' in folder ${weekFolder}`);
+          console.log(`[CHORUS SHORTCUT] Deleted shortcut '${shortcut}' in folder ${weekFolder}`);
+          deletedChoruses.push(shortcut);
+        }
+        let allCreated = true;
+        for (let i = 0; i < choruses.length; i++) {
+          const chorus = choruses[i];
+          const slotNum = i + 1;
+          const chorusFile = findSongFile(chorus, config.songsDirectory);
+          if (!chorusFile) {
+            console.log(`[CHORUS SHORTCUT] Chorus ${slotNum}: File not found in library for ${chorus.number || ''} ${chorus.name}`);
+            allCreated = false;
+            continue;
+          }
+          const shortcutName = `chorus ${slotNum} ${chorus.number ? chorus.number + ' - ' : ''}${chorus.name}`.replace(/[\\/:*?"<>|]/g, '_') + ' - Shortcut.lnk';
+          const shortcutPath = path.join(weekFolder, shortcutName);
+          const desc = `Sunday Chorus ${slotNum}: ${chorus.number ? chorus.number + ' - ' : ''}${chorus.name}`;
+          const rootPath = config.rootPath;
+          const created = await createShortcut(shortcutPath, desc, chorusFile, rootPath);
+          if (created) {
+            console.log(`[CHORUS SHORTCUT] Created shortcut '${shortcutName}' in folder ${weekFolder}`);
+          } else {
+            allCreated = false;
+            console.error(`[CHORUS SHORTCUT] Failed to create shortcut '${shortcutName}' in folder ${weekFolder}`);
+          }
+        }
+        return res.json({ success: true, status: allCreated ? 'created' : 'partial-error' });
+      }
+      return res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'Failed to save chorus selection', status: 'error' });
+    }
+  })();
 });
 
 // Track server start time
