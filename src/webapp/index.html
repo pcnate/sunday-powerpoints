@@ -165,32 +165,35 @@
             </div>
           </div>
         </div>
-        <!-- Notes Modal -->
-        <div class="modal fade" id="notesModal" tabindex="-1" aria-labelledby="notesModalLabel" aria-hidden="true">
-          <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-              <div class="modal-header">
-                <h5 class="modal-title" id="notesModalLabel">Notes for <span id="notesModalDate"></span></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-              </div>
-              <div class="modal-body">
-                <textarea id="notesModalText" class="form-control" rows="12" style="font-family:monospace;"></textarea>
-                <div id="notesModalStatus" class="mt-2"></div>
-              </div>
-              <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="notesModalSaveBtn">Save</button>
-              </div>
-            </div>
-          </div>
+
+      </div>
+    </div>
+  </div>
+  <div class="sidebar bg-body">
+    <h5 class="mb-3">Output Folders</h5>
+    <ul id="folder-list" class="list-group"></ul>
+  </div>
+
+  <!-- Notes Modal -->
+  <div class="modal fade" id="notesModal" tabindex="-1" aria-labelledby="notesModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="notesModalLabel">Notes for <span id="notesModalDate"></span></h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <textarea id="notesModalText" class="form-control" rows="12" style="font-family:monospace;"></textarea>
+          <div id="notesModalStatus" class="mt-2"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" id="notesModalSaveBtn">Save</button>
         </div>
       </div>
     </div>
   </div>
-  <aside class="sidebar bg-body">
-    <h5 class="mb-3">Output Folders</h5>
-    <ul id="folder-list" class="list-group"></ul>
-  </aside>
+  
   <script src="/bootstrap/js/bootstrap.bundle.min.js"></script>
   <script>
     // Fetch template file details and show in a Bootstrap card
@@ -235,10 +238,10 @@
       document.getElementById('yearInput').value = defaultYear;
 
       const runForm = document.getElementById('runForm');
-      let foldersOnlyMode = true; // default to folders-only
+      let foldersOnlyMode = !0; // default to folders-only
       // Button event listeners to set mode and reset modal
       document.getElementById('foldersOnlyBtn').addEventListener('click', function() {
-        foldersOnlyMode = true;
+        foldersOnlyMode = !0;
         document.getElementById('runModalLabel').textContent = 'Create Folders for Sundays';
         // Reset modal state
         runForm.reset();
@@ -311,12 +314,12 @@
         let li = existingItems[folder.name];
         let html = `<div class=\"flex-grow-1 d-flex align-items-center\">`;
         html += `<strong>${folder.name}</strong>`;
-        html += `<span class=\"ms-2\" style=\"font-size:1.2em;\">`;
+        html += `<span class="ms-2" style="font-size:1.2em; margin-top:-2px">`;
         html += folder.hasFile
-          ? `<span title=\"PowerPoint file present. This is the main presentation file for this Sunday.\"><i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:1em;opacity:1;margin-right:2px;'></i></span>`
-          : `<span title=\"No PowerPoint file. This Sunday does not have a presentation file yet.\"><i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:1em;opacity:0.3;margin-right:2px;'></i></span>`;
+          ? `<span title=\"PowerPoint file present. This is the main presentation file for this Sunday.\"><i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:0.8em;opacity:1;margin-right:2px'></i></span>`
+          : `<span title=\"No PowerPoint file. This Sunday does not have a presentation file yet.\"><i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:0.8em;opacity:0.3;margin-right:2px'></i></span>`;
         html += folder.hasMp4
-          ? `<span title=\"MP4 video present in Vids/. This is a video recording of the sermon.\"><i class='fa fa-film' style='color:#444;font-size:0.8em;opacity:1;margin-right:2px;padding-left:5px;'></i></span>`
+          ? `<span title=\"MP4 video present in Vids/. This is a video recording of the sermon.\"><i class='fa fa-film' style='color:green;font-size:0.8em;opacity:1;margin-right:2px;padding-left:5px;'></i></span>`
           : `<span title=\"No MP4 video. No video recording found for this Sunday.\"><i class='fa fa-film' style='color:#444;font-size:0.8em;opacity:0.3;margin-right:2px;padding-left:5px;'></i></span>`;
         html += folder.hasNotes
           ? `<span title=\"Notes text file present. This file contains notes or Bible verses for this Sunday.\"><i class='fa fa-sticky-note notes-icon' data-folder=\"${folder.name}\" style='color:#007bff;font-size:0.8em;opacity:1;margin-right:2px;padding-left:5px;cursor:pointer;'></i></span>`
@@ -339,7 +342,7 @@
             const otherName = other.getAttribute('data-folder');
             if (otherName && folders.findIndex(f => f.name === folder.name) < folders.findIndex(f => f.name === otherName)) {
               list.insertBefore(li, other);
-              inserted = true;
+              inserted = !0;
               break;
             }
           }
@@ -387,7 +390,27 @@
       document.getElementById('notesModalDate').textContent = folderName;
       document.getElementById('notesModalText').value = '';
       document.getElementById('notesModalStatus').innerHTML = '';
-      const modal = new bootstrap.Modal(document.getElementById('notesModal'));
+
+      const elementFriendlyName = `notes-${ folderName.replace(/[^a-z0-9]/gi, '-') }`;
+      const modalID = `notesModal`;
+
+      // check if an existing modal for this folder is already open
+      let notesModalElement = document.getElementById(modalID);
+
+      // Create a new modal element if it doesn't exist
+      if ( !notesModalElement ) {
+        const newModalEl = document.createElement('div');
+        newModalEl.id = modalID;
+        newModalEl.className = elementFriendlyName;
+        document.body.appendChild(newModalEl);
+        notesModalElement = newModalEl;
+      } else {
+        notesModalElement.classList.forEach( c => c.startsWith('notes-') ? notesModalElement.classList.remove( c ) : !0 );
+        notesModalElement.classList.add( elementFriendlyName );
+      }
+
+      // cr
+      const modal = new bootstrap.Modal( notesModalElement );
       modal.show();
       fetch(`/api/notes?folder=${encodeURIComponent(folderName)}`)
         .then(res => res.ok ? res.text() : Promise.reject('Not found'))
@@ -435,7 +458,7 @@
 
       // Add sorting logic
       const table = document.getElementById('songTable');
-      let sortState = renderSongsTable.sortState || { key: null, asc: true };
+      let sortState = renderSongsTable.sortState || { key: null, asc: !0 };
       const getCellValue = (tr, idx) => tr.children[idx].textContent || '';
       const compare = (a, b, type) => {
         if (type === 'number') {
@@ -456,7 +479,7 @@
           const tbody = table.querySelector('tbody');
           const rows = Array.from(tbody.querySelectorAll('tr'));
           const colIdx = idx;
-          const asc = sortState.key === key ? !sortState.asc : true;
+          const asc = sortState.key === key ? !sortState.asc : !0;
           rows.sort((a, b) => {
             const va = getCellValue(a, colIdx);
             const vb = getCellValue(b, colIdx);
@@ -516,7 +539,7 @@
         if (num === '000') return false;
         if (name === 'song template') return false;
         if ((name.includes('000') && name.includes('template')) || (filename.includes('000') && filename.includes('template'))) return false;
-        return true;
+        return !0;
       });
       if (book) filtered = filtered.filter(s => s.book === book);
       if (search) {
@@ -829,7 +852,7 @@
         if (name === 'song template') return false;
         if ((name.includes('000') && name.includes('template')) || (filename.includes('000') && filename.includes('template'))) return false;
         if (filename === 'song template.pptx' || name === 'song template.pptx' || book === 'songtemplate.pptx') return false;
-        return true;
+        return !0;
       });
     }
 
