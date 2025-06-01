@@ -9,6 +9,7 @@
  7. convert to docker (if possible)
  8. add bible verse extraction API endpoint
  9. add bible verse update API endpoint
+ 10. add ccli license extraction and reporting api
 
 ## Convert to TypeScript
 Convert the entire project into TypeScript to ease coding complexity
