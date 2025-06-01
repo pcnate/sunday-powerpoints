@@ -80,14 +80,28 @@ app.get('/api/folders', async (request: Request, response: Response) => {
     const vidsPath = path.join(folderPath, 'Vids');
     let hasMp4 = false;
     let thumbnail = null;
+    let videoFileName = null;
     try {
       const vidsFiles = await fs.promises.readdir(vidsPath);
       hasMp4 = vidsFiles.some(f => f.toLowerCase().endsWith('.mp4'));
+      if (hasMp4) {
+        videoFileName = vidsFiles.find(f => f.toLowerCase().endsWith('.mp4'));
+      }
       const thumbFile = vidsFiles.find(f => f.toLowerCase().endsWith('.jpeg') || f.toLowerCase().endsWith('.thm'));
-      if (thumbFile) {
+      if ( thumbFile ) {
         thumbnail = `/api/thumbnail/${encodeURIComponent(folder)}`;
       }
     } catch {}
+
+    // check for song shortcuts in the folder that start with "song 1", "song 2", "song 3"
+    let hasSong1 = false, hasSong2 = false, hasSong3 = false;
+    files.forEach(f => {
+      const lower = f.toLowerCase();
+      if (lower.startsWith('song 1 ')) hasSong1 = true;
+      if (lower.startsWith('song 2 ')) hasSong2 = true;
+      if (lower.startsWith('song 3 ')) hasSong3 = true;
+    });
+
     // Check for notes file
     const hasNotes = hasNotesFile(folder, files);
     return {
@@ -95,6 +109,10 @@ app.get('/api/folders', async (request: Request, response: Response) => {
       hasFile,
       hasMp4,
       thumbnail,
+      videoFileName,
+      hasSong1,
+      hasSong2,
+      hasSong3,
       hasNotes,
       files, // for debugging or future use, can be removed if not needed
     };
