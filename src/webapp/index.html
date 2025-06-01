@@ -32,10 +32,8 @@
     }
     #song-library-table-scroll {
       overflow: auto;
-      border: 1px solid #eee;
       border-radius: 6px;
-      background: #fff;
-      height: calc(100vh - 119px - 1rem); /* Updated as requested */
+      height: calc(100vh - 119px - 1rem);
       min-height: 120px;
       margin-bottom: 1rem;
       transition: height 0.2s;
@@ -53,7 +51,6 @@
       position: sticky;
       top: 0;
       z-index: 2;
-      background: var(--bs-body-bg, #fff);
     }
     /* Sticky tab bar and search row */
     #mainTab {
@@ -105,7 +102,7 @@
             <span id="songResultCount" style="font-weight:bold;"></span>
           </div>
         </div>
-        <div id="song-library-table-scroll" style="overflow:auto;border:1px solid #eee;border-radius:6px;background:#fff;">
+        <div id="song-library-table-scroll" style="overflow:auto;border-radius:6px">
           <div id="song-library-table-container">
             <div class="text-center text-muted">Loading songs...</div>
           </div>
