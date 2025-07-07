@@ -1,12 +1,645 @@
-import * as path from 'node:path';
+import path from 'node:path';
+import fs from 'node:fs';
+import child_process from 'node:child_process';
 import express, { Request, Response } from 'express';
-import * as dotenv from 'dotenv';
-import fs from 'fs';
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import dotenv from 'dotenv';
+import ws from 'windows-shortcuts';
 const schedule = require('node-schedule');
 import { createShortcut } from './sunday-powerpoints';
+import { Server as SocketIOServer } from 'socket.io';
+import http from 'http';
 
 dotenv.config();
+
+
+/**
+ * Class representing a cache for Sunday folders
+ * 
+ * This class provides methods to get, set, and delete SundayFolder objects
+ * from a cache based on their date (YYYYMMDD format).
+ */
+class FolderCache {
+  size: number;
+  public cache: { [date: string]: SundayFolder };
+  private garbage: { [date: string]: SundayFolder };
+
+  constructor() {
+    this.size = 0;
+    this.cache = {};
+    this.garbage = {};
+  }
+
+
+  /**
+   * Get a SundayFolder by date
+   * 
+   * @param date - date in YYYYMMDD format
+   * @returns SundayFolder object or undefined if not found
+   */
+  get( date: string ): SundayFolder | undefined {
+    return this.cache[ date ];
+  }
+
+
+  /**
+   * Set a SundayFolder in the cache
+   * 
+   * @param date - date in YYYYMMDD format
+   * @param folder - SundayFolder object to set in the cache
+   */
+  set( date: string, folder: SundayFolder ): void {
+    this.cache[ date ] = folder;
+    this.size = Object.keys( this.cache ).length;
+  }
+
+
+  /**
+   * Check if a SundayFolder exists in the cache
+   * 
+   * @param date - date in YYYYMMDD format
+   * @returns true if the folder exists, false otherwise
+   */
+  delete( date: string ): void {
+    this.garbage[ date ] = this.cache[ date ];
+    delete this.cache[ date ];
+    this.size = Object.keys( this.cache ).length;
+
+    // remove from garbage after 10 minutes
+    setTimeout( () => {
+      delete this.garbage[ date ];
+    }, 10 * 60 * 1000);
+  }
+}
+
+
+/**
+ * Class representing a Sunday folder
+ * 
+ * This class creates a SundayFolder object with properties for the folder name,
+ * the path, whether it has a presentation file, thumbnail image, video files,
+ * 
+ * @property {string} name - Name of the folder in YYYYMMDD format
+ * @property {string} path - Absolute path to the folder which ends in YYYYMMDD
+ * @property {boolean} presentation - true if a PowerPoint file with the configured extension exists
+ * @property {string|null} thumbnail - Path to thumbnail image, or null if not found
+ * @property {Video[]} video - Array of video files in the folder
+ * @property {Song|null} song1 - Song 1 shortcut, or null if not set
+ * @property {Song|null} song2 - Song 2 shortcut, or null if not set
+ * @property {Song|null} song3 - Song 3 shortcut, or null if not set
+ * @property {Chorus[]} choruses - Array of chorus shortcuts in the folder
+ * @property {string|null} hasNotes - path to notes file if it exists, or null if not found
+ */
+class SundayFolder {
+  name: string; // YYYYMMDD
+  path: string; // absolute path to the folder which ends in YYYYMMDD
+  presentation: string | null; // path to PowerPoint file if it exists, or null if not found
+  thumbnail: string | null; // path to thumbnail image, or null if not found
+  video: Video[]; // video files
+  song1: Song|null;
+  song2: Song|null;
+  song3: Song|null;
+  choruses: Chorus[];
+  hasNotes: string|null;
+
+  archived: boolean; // archived folders are in ./YYYY/YYYYMMDD instead of ./YYYYMMDD
+  backlog: boolean; // backlog folders are in ./YYYY Backlog/YYYYMMDD instead of ./YYYYMMDD
+
+  /**
+   * Create a SundayFolder instance
+   *
+   * @param name - name of the folder in YYYYMMDD format
+   * @param path - absolute path to the folder
+   */
+  constructor( name: string, path: string ) {
+    this.name = name;
+    this.path = path;
+    this.presentation = null;
+    this.thumbnail = null;
+    this.video = [];
+    this.song1 = null;
+    this.song2 = null;
+    this.song3 = null;
+    this.choruses = [];
+    this.hasNotes = null;
+
+    // Determine if the folder is archived or backlog based on its path
+    this.archived = false;
+    this.backlog = false;
+    if ( this.path.includes( 'Backlog' ) ) {
+      this.backlog = true;
+    } else
+    // regex match path
+    if ( this.path.match(/\/\d{4}\/\d{4}-?\d{2}-?\d{2}$/) ) {
+      this.archived = true;
+    }
+
+    // Check if the folder has a PowerPoint file with the configured extension
+    this.scanFolder()
+  }
+
+
+  /**
+   * Check if the folder has a PowerPoint file with the configured extension
+   *
+   * @param _path - absolute path to the video file
+   */
+  addVideo( _path: fs.PathLike ): void {
+    if (this.video.some(v => v.path === _path.toString())) return; // already exists
+    this.video.push( new Video( _path ) );
+  }
+
+
+  /**
+   * Remove a video from the list
+   * 
+   * @param path - absolute path to the video file
+   */
+  removeVideo( path: fs.PathLike ): void {
+    const index = this.video.findIndex(v => v.path === path.toString());
+    if (index !== -1) this.video.splice(index, 1);
+  }
+
+
+  /**
+   * Set a song for the given number
+   * 
+   * @param _num '1 | 2 | 3' - song number to set (1, 2, or 3)
+   * @param _target - absolute path to the target song file
+   */
+  async setSong( _num: 1 | 2 | 3, _target: fs.PathLike ) {
+    if ( _num === 1 && !!this.song1 ) await this.song1.delete();
+    if ( _num === 2 && !!this.song2 ) await this.song2.delete();
+    if ( _num === 3 && !!this.song3 ) await this.song3.delete();
+
+    const song = new Song( `song ${ _num }`, _target );
+
+    if ( _num === 1 ) this.song1 = song;
+    else if ( _num === 2 ) this.song2 = song;
+    else if ( _num === 3 ) this.song3 = song;
+  }
+
+
+  /**
+   * Add a chorus to the end of the choruses list
+   * 
+   * @param _target - absolute path to the target chorus file
+   */
+  addChorus( _target: fs.PathLike ) {
+    // determine what the current chorus number is
+    const chorusNumber = this.choruses.length + 1;
+    const chorus = new Chorus( `chorus ${ chorusNumber }`, _target );
+    this.choruses.push( chorus );
+  }
+
+
+  /**
+   * delete a chorus from the array after running its delete method
+   * then update the chorus prefix with the new numbers
+   */
+  deleteChorus( chorus: Chorus ) {
+    chorus.delete();
+    this.choruses = this.choruses.filter(c => c !== chorus);
+    this.choruses.forEach( ( _chorus, index ) => {
+      _chorus.changePrefix( `chorus ${ index + 1 }` );
+    });
+  }
+
+
+  /**
+   * Scan the folder for files and set properties accordingly
+   */
+  async scanFolder() {
+    const files = await fs.promises.readdir( this.path );
+    let changes = false;
+
+    const choruses: { name: string, path: string, target: string|null }[] = [];
+
+    for ( const file of files ) {
+      const filePath = path.join( this.path, file );
+      const stat = await fs.promises.stat( filePath );
+      
+      if ( stat.isFile() ) {
+        // Check for PowerPoint file with configured extension
+        if ( file.toLowerCase().endsWith( '.' + config.ext.toLowerCase() ) ) {
+          if ( !this.presentation ) {
+            this.presentation = filePath;
+            changes = true;
+          }
+          continue; // skip further checks for PowerPoint file
+        }
+
+        // Check for notes file
+        if ( /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i.test( file ) ) {
+          if ( this.hasNotes === filePath ) {
+            this.hasNotes = filePath;
+            changes = true;
+          }
+          continue; // skip further checks for notes file
+        }
+
+        // Check for song shortcuts and get the target file
+        if ( file.toLowerCase().startsWith( 'song ' ) ) {
+          const songMatch = file.match(/^song (\d+) /i);
+          if ( !songMatch ) continue; // not a song shortcut
+
+          const songNumber = parseInt( songMatch[1] );
+          const target = await getShortcutTarget( filePath );
+          const song = new Song( `song ${ songNumber }`, target || '', false );
+
+          if ( songNumber === 1 ) {
+            // check if song1 is different than song
+            if ( this.song1 && this.song1.target === song.target ) continue; // already exists
+            this.song1 = song;
+            changes = true;
+            continue;
+          } else if ( songNumber === 2 ) {
+            if ( this.song2 && this.song2.target === song.target ) continue; // already exists
+            this.song2 = song;
+            changes = true;
+            continue;
+          } else if ( songNumber === 3 ) {
+            if ( this.song3 && this.song3.target === song.target ) continue; // already exists
+            this.song3 = song;
+            changes = true;
+            continue;
+          }
+        }
+
+        // Check for chorus shortcuts
+        if ( file.toLowerCase().startsWith( 'chorus ' ) ) {
+          const target = await getShortcutTarget( filePath );
+          choruses.push({ name: file, path: filePath, target });
+        }
+
+      }
+
+      // post process the choruses
+      if ( choruses.length > 0 ) {
+        choruses.sort( ( a, b ) => a.name.localeCompare( b.name ) ).forEach( async chorus => {
+          // extract the prefix 
+          const prefix = chorus.name.match(/^(chorus\s*\d*)/i)?.[0] || 'chorus';
+          const target = chorus.target || '';
+          const _chorus = new Chorus( prefix, target, false );
+          // check if the chorus already exists
+          if ( this.choruses.some( c => c.path === _chorus.path ) ) return; // already exists
+          this.choruses.push( _chorus );
+          changes = true;
+        });
+      }
+    }
+
+    const videoFiles = await fs.promises.readdir( path.join( this.path, 'Vids' ) ).catch( () => [] );
+    for ( const videoFile of videoFiles ) {
+      const videoPath = path.join( this.path, 'Vids', videoFile );
+      const stat = await fs.promises.stat( videoPath );
+
+      if ( stat.isFile() ) {
+        // if the video is a thm or jpeg file then it is the thumbnail
+        if ( videoFile.toLocaleLowerCase().endsWith( '.thm' ) ) {
+          // rename the file to a jpeg file
+          const newPath = videoPath.replace(/\.thm$/i, '.jpeg');
+          await fs.promises.rename( videoPath, newPath );
+          this.thumbnail = newPath;
+          changes = true;
+        } else
+        
+        // add the video file to the list
+        if ( videoFile.toLowerCase().endsWith( '.jpeg' ) ) {
+          if ( this.thumbnail !== videoPath ) {
+            this.thumbnail = videoPath;
+            changes = true;
+          }
+          continue;
+        }
+        this.addVideo( videoPath );
+      }
+    }
+
+    // TODO: send an event to the socketio client that changes were detected
+    if ( changes ) {
+      io.emit( 'folder-changes', this.toJSON() );
+    }
+  }
+
+
+  /**
+   * Convert the SundayFolder object to a JSON representation
+   * 
+   * @returns JSON object with folder properties
+   */
+  toJSON(): object {
+    return {
+      name: this.name,
+      path: this.path,
+      presentation: this.presentation,
+      thumbnail: this.thumbnail,
+      video: this.video.map( v => v.toJSON() ),
+      choruses: this.choruses.map( c => c.toJSON() ),
+      song1: this.song1 ? this.song1.toJSON() : null,
+      song2: this.song2 ? this.song2.toJSON() : null,
+      song3: this.song3 ? this.song3.toJSON() : null,
+      hasNotes: this.hasNotes,
+      archived: this.archived,
+      backlog: this.backlog
+    }
+  }
+}
+
+
+/**
+ * Get the target of a Windows shortcut file
+ * 
+ * @param shortcutPath - Path to the shortcut file
+ */
+async function getShortcutTarget( shortcutPath: fs.PathLike ): Promise<string | null> {
+  return new Promise( ( resolve, reject ) => {
+    ws.query( shortcutPath.toString(), ( error: string | null, options?: ws.ShortcutOptions ) => {
+      if ( error ) {
+        console.error(`Error querying shortcut ${shortcutPath}:`, error);
+        resolve( null );
+      } else if ( options && options.target ) {
+        resolve( options.target );
+      } else {
+        resolve( null );
+      }
+    });
+  });
+}
+
+
+/**
+ * Class representing a chorus shortcut
+ * 
+ * @property {string} name - Name of the video file
+ * @property {string} camera - Optional camera name if available
+ * @property {string} type - Type of the video file (mp4 or mts)
+ * @property {string} path - Absolute path to the video file
+ */
+class Video {
+  name: string;
+  camera?: string; // optional camera name if available
+  type: 'mp4' | 'mts';
+  path: string;
+
+
+  /**
+   * Create a Video object
+   * 
+   * @param path - absolute path to the video file
+   */
+  constructor( path: fs.PathLike ) {
+    this.path = path.toString();
+    this.name = this.path.split('/').pop() || '';
+    this.type = this.name.toLowerCase().endsWith('.mp4') ? 'mp4' : 'mts';
+
+    this.camera = 'unknown';
+
+    // TODO add rules for camera name extraction from the path or metadata
+    // main camera uses /\d{5}\.(MP4|MTS)/ format
+    const cameraMatch = this.name.match(/(\d{5})\.(mp4|mts)$/i);
+    if ( cameraMatch ) this.camera = 'main';
+    else if (this.name.toLowerCase().includes('camera2'))
+      this.camera = 'camera2';
+    else if (this.name.toLowerCase().includes('camera3'))
+      this.camera = 'camera3';
+  }
+
+
+  /**
+   * Convert the Video object to a JSON representation
+   * 
+   * @returns JSON object with video properties
+   */
+  toJSON(): object {
+    return {
+      name: this.name,
+      camera: this.camera,
+      type: this.type,
+      path: this.path
+    };
+  }
+}
+
+
+/**
+ * Class representing a song shortcut
+ * 
+ * This class creates a song shortcut object with the given prefix and target file path.
+ * 
+ * @property {string} name - Name of the song file, derived from the target file path
+ * @property {string} prefix - Prefix for the shortcut name, e.g. "song 1"
+ * @property {string} path - path of the shortcut file
+ * @property {string} target - Absolute path to the target file
+ * @property {string} number - Song number, if available (3 digits at the start of the filename)
+ * @property {string} book - Book/source of the song, derived from the target file path
+ * @property {string} ccli - CCLI number of the song, if available
+ */
+class Song {
+  name: string;
+  prefix: string;
+  path: string;
+  target: string;
+  number?: string;
+  book?: string;
+  ccli?: string;
+
+
+  /**
+   * Constructor for Song class
+   * Creates a song shortcut object with the given prefix and target file path.
+   * 
+   * @param prefix - prefix for the shortcut name, e.g. "song 1"
+   * @param _target - absolute path to the target file
+   * @param create - whether to create the shortcut file (default: true)
+   */
+  constructor( prefix: string, _target: fs.PathLike, create: boolean = true ) {
+    this.prefix = prefix;
+    this.target = _target.toString();
+    this.name = this.target.split( path.sep ).pop() || '';
+    // Extract song number if filename starts with exactly 3 digits, optionally followed by space or dash
+    // Example: `123 - Song Name.pptx` or `123- Song Name.pptx` or `123-Name.pptx`
+    const match = this.name.match(/^(\d{3})\s*-?\s*/);
+    this.number = match ? match[1] : undefined;
+    // Book/source is the top-level folder (last part of path)
+    this.book = this.target.split( path.sep ).slice(-2, -1)[0];
+    this.path = path.join(config.outputDirectory, prefix + ' ' + this.name);
+
+    // whether to auto create the shortcut file
+    if ( create ) {
+      // Create the shortcut file if it does not exist
+      const exists = fs.promises.stat(this.path)
+      .then(() => true)
+      .catch(() => false);
+      
+      // Create the shortcut path
+      if ( !exists ) {
+        createShortcut( this.path, prefix + ' ' + this.name, this.target, config.rootPath || '%OneDriveConsumer%' )
+          .then(() => console.log(`Created song shortcut: ${this.path}`))
+          .catch((error) => console.error(`Failed to create song shortcut ${this.path}:`, error));
+      }
+    }
+  }
+
+
+  /**
+   * delete the song shortcut
+   * 
+   * @returns - result object containing success status and new path
+   */
+  async delete(): Promise<boolean> {
+    try {
+      await fs.promises.unlink( this.path );
+      console.log( `Deleted song shortcut: ${ this.path }` );
+      return true;
+    } catch (error) {
+      console.error( `Failed to delete song shortcut ${ this.path }:`, error );
+      return false;
+    }
+  }
+
+
+  /**
+   * Convert the Song object to a JSON representation
+   * 
+   * @returns JSON object with song properties
+   */
+  toJSON(): object {
+    return {
+      name: this.name,
+      prefix: this.prefix,
+      path: this.path,
+      target: this.target,
+      number: this.number,
+      book: this.book,
+      ccli: this.ccli
+    };
+  }
+}
+
+
+/**
+ * Class representing a chorus
+ * 
+ * This class creates a chorus object with the given prefix and target file path.
+ * 
+ * @property {string} name - Name of the chorus, derived from the target file path
+ * @property {string} prefix - Prefix for the chorus name, e.g. "chorus 1"
+ * @property {string} path - path of the shortcut file
+ * @property {string} target - Absolute path to the target file
+ * @property {string} book - Book/source of the chorus, derived from the target file path
+ * @property {string} ccli - CCLI number of the song, if available
+ */
+class Chorus {
+  name: string;
+  prefix: string;
+  path: string;
+  target: string;
+  book?: string;
+  ccli?: string;
+
+
+  /**
+   * Constructor for Chorus class
+   * Creates a chorus object with the given prefix and target file path.
+   * 
+   * @param prefix - prefix for the chorus name, e.g. "chorus"
+   * @param _target - absolute path to the target file
+   * @param create - whether to create the shortcut file (default: true)
+   */
+  constructor( prefix: string, _target: fs.PathLike, create: boolean = true ) {
+    this.prefix = prefix;
+    this.target = _target.toString();
+    this.name = this.target.split( path.sep ).pop() || '';
+
+    // Book/source is the top-level folder (last part of path)
+    this.book = this.target.split( path.sep ).slice(-2, -1)[0];
+
+    // Create the path for the chorus file
+    this.path = path.join(config.outputDirectory, prefix + ' ' + this.name);
+
+    // If create is false, do not create the shortcut file
+    if ( !create ) return;
+
+    // determine if the file already exists
+    const exists = fs.promises.stat(this.path)
+      .then(() => true)
+      .catch(() => false);
+
+    if ( !exists ) {
+      // If the file does not exist, create a shortcut to the target file
+      createShortcut( this.path, prefix + ' ' + this.name, this.target, config.rootPath || '%OneDriveConsumer%' )
+        .then(() => console.log(`Created chorus shortcut: ${this.path}`))
+        .catch((error) => console.error(`Failed to create chorus shortcut ${this.path}:`, error));
+    }
+  }
+
+
+  /**
+   * Change the prefix of the chorus name and path
+   * 
+   * @param prefix - new prefix for the chorus
+   * @returns - result object containing success status and new path
+   */
+  async changePrefix( prefix: string ): Promise<{ success: boolean, path: string }> {
+    // No change needed, return current path
+    if ( prefix === this.prefix ) {
+      return { success: true, path: this.path };
+    }
+
+    // Change the prefix of the chorus name and path
+    const oldName = this.name;
+    this.name = prefix + ' ' + oldName;
+    this.path = path.join( path.dirname( this.path ), this.name );
+
+    // attempt to rename the existing file
+    const success = await fs.promises.rename( this.path, this.path )
+      .then(() => true)
+      .catch((error) => {
+        console.error(`Failed to rename chorus file ${this.path}:`, error);
+        return false;
+      });
+
+    return { success, path: this.path };
+  }
+
+
+  /**
+   * Delete the chorus file
+   * 
+   * @returns - promise that resolves when the file is deleted
+   */
+  async delete(): Promise<boolean> {
+    try {
+      await fs.promises.unlink(this.path);
+      console.log(`Deleted chorus file: ${this.path}`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to delete chorus file ${this.path}:`, error);
+      return false;
+    }
+  }
+
+
+  /**
+   * Convert the Chorus object to a JSON representation
+   * 
+   * @returns JSON object with chorus properties
+   */
+  toJSON(): object {
+    return {
+      name: this.name,
+      prefix: this.prefix,
+      path: this.path,
+      target: this.target,
+      book: this.book,
+      ccli: this.ccli
+    };
+  }
+}
+
+
+const sundayFolders: FolderCache = new FolderCache();
+const videoFolders: string[] = [];
 
 // Read options from environment variables, with defaults as described in roadmap.md
 const config = {
@@ -33,9 +666,25 @@ if (process.env.NODE_ENV === 'development') {
   console.log('Server running in production mode.');
 }
 
-// Start Express web server
+// Start Express web server with HTTP server for socket.io
 const app = express();
 app.use(express.json());
+
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: '*', // Allow all origins (adjust as needed for production)
+    methods: ['GET', 'POST']
+  }
+});
+
+// Socket.io connection handler
+io.on('connection', (socket) => {
+  console.log('Socket.io client connected:', socket.id);
+  socket.on('disconnect', () => {
+    console.log('Socket.io client disconnected:', socket.id);
+  });
+});
 
 // Log all /api requests, except /api/webapp-last-modified
 app.use('/api', (req, res, next) => {
@@ -70,11 +719,11 @@ app.get('/api/folders', async (request: Request, response: Response) => {
   const folderData = await Promise.all(folders.map(async (folder) => {
     const folderPath = path.join(config.outputDirectory, folder);
     // Check for file with configured ext in main folder
-    let hasFile = false;
+    let hasPre = false;
     let files: string[] = [];
     try {
       files = await fs.promises.readdir(folderPath);
-      hasFile = files.some(f => f.toLowerCase().endsWith('.' + config.ext.toLowerCase()));
+      hasPre = files.some(f => f.toLowerCase().endsWith('.' + config.ext.toLowerCase()));
     } catch {}
     // Check for mp4 and thumbnail in Vids subdir
     const vidsPath = path.join(folderPath, 'Vids');
@@ -106,7 +755,7 @@ app.get('/api/folders', async (request: Request, response: Response) => {
     const hasNotes = hasNotesFile(folder, files);
     return {
       name: folder,
-      hasFile,
+      hasPre,
       hasMp4,
       thumbnail,
       videoFileName,
@@ -225,7 +874,7 @@ function runFolderCreation({ month, year, write, foldersOnly }: { month: number,
       cwd = path.resolve(__dirname, '..'); // project root
       useShell = false;
     }
-    const child: ChildProcessWithoutNullStreams = spawn(
+    const child: child_process.ChildProcessWithoutNullStreams = child_process.spawn(
       command,
       args,
       {
@@ -356,116 +1005,225 @@ app.get('/api/songs', async (req: Request, res: Response) => {
   res.json(songFiles);
 });
 
+
+/**
+ * function to get all sub folders in a directory recursively
+ * 
+ * @param dir - directory to search
+ * @returns array of absolute paths of all sub folders
+ * 
+ * use async yield
+ */
+async function* getSubFolders( dir: string ): AsyncGenerator<string> {
+  const subFolders: string[] = [];
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    console.error(`Error reading directory ${dir}:`, err);
+    return;
+  }
+  for ( const entry of entries ) {
+    if ( entry.isDirectory() ) {
+      const fullPath = path.join( dir, entry.name );
+      subFolders.push( fullPath );
+      yield fullPath; // yield the folder path
+      // Recursively get subfolders
+      for await ( const sub of getSubFolders( fullPath ) ) {
+        yield sub; // yield each subfolder found
+      }
+    }
+  }
+  return subFolders; // return all found subfolders
+}
+
+
+/**
+ * Get all Sundays in the month
+ * 
+ * @param year - Year (e.g. 2023)
+ * @param month - Month (1-12)
+ * @return Array of Date objects representing all Sundays in the month
+ */
+function getSundaysInMonth( year: number, month: number ) {
+  const date = new Date( year, month - 1, 1 );
+
+  // Find the first Sunday of the month
+  date.setDate( ( 7 - date.getDay() ) % 7 + 1 ); // move to first Sunday of the month
+  const sundays: Date[] = [
+    new Date( date ), // 1-6th day of month
+    new Date( date.getTime() +  7 * 86_400_000 ), // 8-14th day of month
+    new Date( date.getTime() + 14 * 86_400_000 ), // 15-21st day of month
+    new Date( date.getTime() + 21 * 86_400_000 ), // 22-28th day of month
+    new Date( date.getTime() + 28 * 86_400_000 )  // 29-31st day of month
+  ];
+
+  // Filter out any dates that are not in the requested month
+  return sundays.filter( ( d: Date ) => d.getMonth() === month - 1 );
+}
+
+
+/**
+ * scan config.outputDirectory for folders and update the cache
+ * send an event when a new folder is found
+ * 
+ */
+async function scanFolders() {
+  const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+
+  // scan existing folders in the cache for changes
+  for ( const key of Object.keys( sundayFolders.cache ) ) {
+    const folder = sundayFolders.cache[key];
+    try {
+      const stat = await fs.promises.stat( folder.path );
+      if ( !stat.isDirectory() ) {
+        // remove from cache if it is not a directory
+        sundayFolders.delete( key );
+      }
+    } catch ( error ) {
+      console.error( `Error checking folder ${ folder.path }:`, error );
+      // remove from cache if it does not exist anymore
+      sundayFolders.delete( key );
+    }
+  }
+
+  // scan for new folders in the output directory
+  for await ( const folder of getSubFolders( outputDir ) ) {
+    // check if the folder ends with YYYYMMDD format
+    const folderName = path.basename( folder );
+    const dateMatch = folderName.match(/^\d{4}-?\d{2}-?\d{2}$/);
+    if ( !dateMatch ) {
+      continue;
+    }
+    
+    // Check if the folder is already in the cache
+    if ( sundayFolders.get( path.basename( folder ) ) ) {
+      continue;
+    }
+    
+    // Create a new Folder object and add it to the cache
+    const newFolder = new SundayFolder( dateMatch[0], folder );
+    sundayFolders.set( dateMatch[0], newFolder );
+  }
+
+  console.log( `Scanned ${ sundayFolders.size } folders in ${ outputDir }` );
+}
+
+
 // --- SONG SELECTION API ENDPOINTS ---
 // Returns song/chorus selections for each week in a given month
-app.get('/api/week-song-selections', (req: Request, res: Response) => {
-  (async () => {
-    try {
-      const year = parseInt((req.query.year as string) || '');
-      const month = parseInt((req.query.month as string) || '');
-      if (!year || !month) return res.status(400).json({ error: 'Missing year or month' });
-      // Get all Sundays in the month
-      function getSundaysInMonth(year: number, month: number) {
-        const sundays: Date[] = [];
-        const date = new Date(year, month - 1, 1);
-        while (date.getMonth() === month - 1) {
-          if (date.getDay() === 0) sundays.push(new Date(date));
-          date.setDate(date.getDate() + 1);
-        }
-        return sundays;
-      }
-      const sundays = getSundaysInMonth(year, month);
-      const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
-      const fs = require('fs');
-      const path = require('path');
-      // For each week, try to find song shortcuts and chorus info
-      const result: Record<string, { songs: any[]; choruses: any[] }> = {};
-      for (let weekIdx = 0; weekIdx < sundays.length; weekIdx++) {
-        const sunday = sundays[weekIdx];
-        // Folder name: YYYYMMDD
-        const folderName = `${sunday.getFullYear()}${String(sunday.getMonth()+1).padStart(2,'0')}${String(sunday.getDate()).padStart(2,'0')}`;
-        const weekFolder = path.join(outputDir, folderName);
-        const songs: (null | { number?: string; name: string })[] = [null, null, null];
-        let choruses: any[] = [];
-        if (fs.existsSync(weekFolder)) {
-          // Find song shortcuts: song 1, song 2, song 3
-          const files = fs.readdirSync(weekFolder);
-          for (let i = 1; i <= 3; i++) {
-            // Regex: song <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
-            // Examples:
-            //   song 1 203 - Tell Me the Story of Jesus - Shortcut.lnk
-            //   song 2 203 Tell Me the Story of Jesus.lnk
-            //   song 3 Tell Me the Story of Jesus - Shortcut.lnk
-            //   song 1 203- Tell Me the Story of Jesus.lnk
-            //   song 1 203 -Tell Me the Story of Jesus.lnk
-            //   song 1 Tell Me the Story.lnk
-            const shortcut = files.find((f: string) => f.toLowerCase().startsWith(`song ${i} `) && f.toLowerCase().endsWith('.lnk'));
-            if (shortcut) {
-              const re = /^song\s+(?<slot>\d+)\s+(?:(?<number>\d{3})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
-              const match = shortcut.match(re);
-              if (match && match.groups) {
-                let name = match.groups.name.trim();
-                // Remove any trailing file extension or ' - Shortcut' if present (shouldn't be, but just in case)
-                name = name.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
-                if (match.groups.number) {
-                  songs[i-1] = { number: match.groups.number, name };
-                } else {
-                  songs[i-1] = { name };
-                }
-              } else {
-                // fallback: just use the rest of the name
-                let rest = shortcut.replace(/^song \d+ /i, '').replace(/\.lnk$/i, '');
-                rest = rest.replace(/ - Shortcut$/i, '').trim();
-                songs[i-1] = { name: rest };
-              }
-            }
-          }
-          // --- CHORUS SHORTCUTS ---
-          // Detect chorus shortcuts: chorus 1, chorus 2, etc.
-          for (let c = 1; c <= 10; c++) { // support up to 10 choruses per week
-            const chorusShortcut = files.find((f: string) => f.toLowerCase().startsWith(`chorus ${c} `) && f.toLowerCase().endsWith('.lnk'));
-            if (chorusShortcut) {
-              // Regex: chorus <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
-              // Examples:
-              //   chorus 1 10,000 Reasons.pptx - Shortcut.lnk
-              //   chorus 2 123 - Name.lnk
-              //   chorus 3 Name - Shortcut.lnk
-              //   chorus 1 123- Name.lnk
-              //   chorus 1 123 -Name.lnk
-              //   chorus 1 Name.lnk
-              const re = /^chorus\s+(?<slot>\d+)\s+(?:(?<number>\d{1,5})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
-              const match = chorusShortcut.match(re);
-              if (match && match.groups) {
-                let name = match.groups.name.trim();
-                // Remove any trailing file extension or ' - Shortcut' if present
-                name = name.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
-                let chorusObj: any = { name };
-                if (match.groups.number) chorusObj.number = match.groups.number;
-                choruses.push(chorusObj);
-              } else {
-                // fallback: just use the rest of the name
-                let rest = chorusShortcut.replace(/^chorus \d+ /i, '').replace(/\.lnk$/i, '');
-                rest = rest.replace(/ - Shortcut$/i, '').trim();
-                choruses.push({ name: rest });
-              }
-            }
-          }
-          // Try to load choruses.json if present
-          const chorusJson = path.join(weekFolder, 'choruses.json');
-          if (fs.existsSync(chorusJson)) {
-            try {
-              const chorusData = JSON.parse(fs.readFileSync(chorusJson, 'utf8'));
-              if (Array.isArray(chorusData)) choruses = chorusData;
-            } catch {}
-          }
-        }
-        result[String(weekIdx)] = { songs, choruses };
-      }
-      res.json(result);
-    } catch (e) {
-      res.status(500).json({ error: 'Failed to load week selections' });
+app.get('/api/week-song-selections', async (req: Request, res: Response) => {
+  try {
+    const year = parseInt((req.query.year as string) || '');
+    const month = parseInt((req.query.month as string) || '');
+    if (!year || !month) {
+      res.status(400).json({ error: 'Missing year or month' });
+      return;
     }
-  })();
+    const sundays = getSundaysInMonth( year, month );
+    const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+    // For each week, try to find song shortcuts and chorus info
+    const result: Record<string, { songs: any[]; choruses: any[] }> = {};
+    for ( let weekIdx = 0; weekIdx < sundays.length; weekIdx++ ) {
+      const sunday = sundays[weekIdx];
+      let weekFolder: string|null = null;
+      const subFolderName = `${sunday.getFullYear()}${String( sunday.getMonth() + 1 ).padStart( 2, '0' )}${String( sunday.getDate() ).padStart( 2, '0' )}`;
+
+      const possibleFolders = [
+        path.join( outputDir, subFolderName ),
+        path.join( outputDir, `${ sunday.getFullYear() }`, subFolderName ),
+        path.join( outputDir, `${ sunday.getFullYear() } backlog`, subFolderName )
+      ]
+      
+      // try outputDir/YYYYMMDD
+      for ( const folder of possibleFolders ) {
+        if ( fs.existsSync( folder ) && fs.statSync( folder ).isDirectory() ) {
+          weekFolder = folder;
+          break;
+        }
+      }
+
+      if ( !weekFolder ) continue;
+
+      const songs: (null | { number?: string; name: string })[] = [null, null, null];
+      let choruses: any[] = [];
+
+      // Find song shortcuts: song 1, song 2, song 3
+      const files = await fs.promises.readdir( weekFolder );
+      for (let i = 1; i <= 3; i++) {
+        // Regex: song <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
+        // Examples:
+        //   song 1 203 - Tell Me the Story of Jesus - Shortcut.lnk
+        //   song 2 203 Tell Me the Story of Jesus.lnk
+        //   song 3 Tell Me the Story of Jesus - Shortcut.lnk
+        //   song 1 203- Tell Me the Story of Jesus.lnk
+        //   song 1 203 -Tell Me the Story of Jesus.lnk
+        //   song 1 Tell Me the Story.lnk
+        const shortcut = files.find((f: string) => f.toLowerCase().startsWith(`song ${i} `) && f.toLowerCase().endsWith('.lnk'));
+        if (shortcut) {
+          const re = /^song\s+(?<slot>\d+)\s+(?:(?<number>\d{3})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
+          const match = shortcut.match(re);
+          if (match && match.groups) {
+            let name = match.groups.name.trim();
+            // Remove any trailing file extension or ' - Shortcut' if present (shouldn't be, but just in case)
+            name = name.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
+            if (match.groups.number) {
+              songs[i-1] = { number: match.groups.number, name };
+            } else {
+              songs[i-1] = { name };
+            }
+          } else {
+            // fallback: just use the rest of the name
+            let rest = shortcut.replace(/^song \d+ /i, '').replace(/\.lnk$/i, '');
+            rest = rest.replace(/ - Shortcut$/i, '').trim();
+            songs[i-1] = { name: rest };
+          }
+        }
+      }
+      // --- CHORUS SHORTCUTS ---
+      // Detect chorus shortcuts: chorus 1, chorus 2, etc.
+      for (let c = 1; c <= 10; c++) { // support up to 10 choruses per week
+        const chorusShortcut = files.find((f: string) => f.toLowerCase().startsWith(`chorus ${c} `) && f.toLowerCase().endsWith('.lnk'));
+        if (chorusShortcut) {
+          // Regex: chorus <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
+          // Examples:
+          //   chorus 1 10,000 Reasons.pptx - Shortcut.lnk
+          //   chorus 2 123 - Name.lnk
+          //   chorus 3 Name - Shortcut.lnk
+          //   chorus 1 123- Name.lnk
+          //   chorus 1 123 -Name.lnk
+          //   chorus 1 Name.lnk
+          const re = /^chorus\s+(?<slot>\d+)\s+(?:(?<number>\d{1,5})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
+          const match = chorusShortcut.match(re);
+          if (match && match.groups) {
+            let name = match.groups.name.trim();
+            // Remove any trailing file extension or ' - Shortcut' if present
+            name = name.replace(/\.[a-zA-Z0-9]{2,5}$/i, '').replace(/ - Shortcut$/i, '').trim();
+            let chorusObj: any = { name };
+            if (match.groups.number) chorusObj.number = match.groups.number;
+            choruses.push(chorusObj);
+          } else {
+            // fallback: just use the rest of the name
+            let rest = chorusShortcut.replace(/^chorus \d+ /i, '').replace(/\.lnk$/i, '');
+            rest = rest.replace(/ - Shortcut$/i, '').trim();
+            choruses.push({ name: rest });
+          }
+        }
+      }
+      // Try to load choruses.json if present
+      const chorusJson = path.join(weekFolder, 'choruses.json');
+      if (fs.existsSync(chorusJson)) {
+        try {
+          const chorusData = JSON.parse(fs.readFileSync(chorusJson, 'utf8'));
+          if (Array.isArray(chorusData)) choruses = chorusData;
+        } catch {}
+      }
+      result[String(weekIdx)] = { songs, choruses };
+    }
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load week selections' });
+  }
 });
 
 // --- SHARED HELPERS FOR SONG/CHORUS SHORTCUTS ---
@@ -647,64 +1405,48 @@ if (process.env.NODE_ENV === 'development') {
   app.use('/bootstrap/js', express.static(path.join(__dirname, '..', 'node_modules', 'bootstrap', 'dist', 'js')));
 }
 
-// Schedule: 2nd Monday of every month at midnight
-schedule.scheduleJob('0 0 * * 1', async function() {
+
+/**
+ * Schedule folder creation on the 2nd Monday of the next month
+ * This function checks if today is the 2nd Monday of the next month,
+ */
+async function scheduleFolderCreation() {
   const now = new Date();
   // Find the 2nd Monday of the next month
   let year = now.getFullYear();
   let month = now.getMonth() + 2; // JS months are 0-based, so +2 for next month
-  if (month > 12) {
+  if ( month > 12 ) {
     month = 1;
     year++;
   }
   // Find the date of the 2nd Monday
-  const firstDay = new Date(year, month - 1, 1);
-  let firstMonday = 1 + ((8 - firstDay.getDay()) % 7);
+  const firstDay = new Date( year, month - 1, 1 );
+  let firstMonday = 1 + ( ( 8 - firstDay.getDay() ) % 7 );
   let secondMonday = firstMonday + 7;
   // Only run if today is the 2nd Monday of the month
   const today = new Date();
-  if (today.getFullYear() === year && today.getMonth() + 1 === month && today.getDate() === secondMonday) {
-    const result = await runFolderCreation({ month, year, write: true, foldersOnly: true });
-    if (!result.success) {
-      console.error('Scheduled folder creation failed:', result.error);
+  if ( today.getFullYear() === year && today.getMonth() + 1 === month && today.getDate() === secondMonday ) {
+    const result = await runFolderCreation( { month, year, write: true, foldersOnly: true } );
+    if ( !result.success ) {
+      console.error( 'Scheduled folder creation failed:', result.error );
     } else {
-      console.log('Scheduled folder creation succeeded:', result.message);
+      console.log( 'Scheduled folder creation succeeded:', result.message );
     }
   }
-});
+}
 
-// --- SCHEDULED JOB: Rename .thm files to .jpeg every minute on Sundays ---
-schedule.scheduleJob('* * * * *', async function() {
-  const now = new Date();
-  // Only run on Sundays
-  if (now.getDay() !== 0) return;
-  const outputDir = config.outputDirectory;
-  try {
-    const folders = await fs.promises.readdir(outputDir, { withFileTypes: true });
-    for (const entry of folders) {
-      if (!entry.isDirectory()) continue;
-      const weekFolder = path.join(outputDir, entry.name, 'Vids');
-      if (!fs.existsSync(weekFolder)) continue;
-      const files = await fs.promises.readdir(weekFolder);
-      for (const file of files) {
-        if (file.toLowerCase().endsWith('.thm')) {
-          const thmPath = path.join(weekFolder, file);
-          const jpegPath = path.join(weekFolder, file.replace(/\.thm$/i, '.jpeg'));
-          // Only rename if .jpeg does not already exist
-          if (!fs.existsSync(jpegPath)) {
-            await fs.promises.rename(thmPath, jpegPath);
-            console.log(`[THUMBNAIL] Renamed '${thmPath}' to '${jpegPath}'`);
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.error('[THUMBNAIL] Error during .thm to .jpeg scan:', e);
-  }
-});
+function setupExpressEndpoints() {
 
-const PORT = 80;
-app.listen(PORT, () => {
-  console.log(`Web server listening on port ${PORT}`);
-});
+}
 
+// move all global logic and variables down here
+
+setupExpressEndpoints();
+// Schedule: 2nd Monday of every month at midnight
+schedule.scheduleJob('0 0 * * 1', scheduleFolderCreation );
+schedule.scheduleJob('* * * * *', scanFolders );
+
+const PORT = process?.env?.PORT || 8080;
+server.listen( PORT, () => {
+  console.log(`Web server (with socket.io) listening on port ${ PORT }`);
+});

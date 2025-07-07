@@ -219,21 +219,22 @@
     setInterval(fetchAndRenderTemplateInfo, 10000);
 
     document.addEventListener('DOMContentLoaded', function() {
-      // Set default month/year for the modal
-      const now = new Date();
-      let defaultMonth = now.getMonth() + 1; // JS months are 0-based
-      let defaultYear = now.getFullYear();
-      if (now.getDate() >= 16) {
-        if (defaultMonth === 12) {
-          defaultMonth = 1;
-          defaultYear++;
-        } else {
-          defaultMonth++;
-        }
-      }
-      document.getElementById('monthInput').value = defaultMonth;
-      document.getElementById('yearInput').value = defaultYear;
+      renderMonthDropdown();
+      const urlParams = new URLSearchParams( window.location.search );
+      const monthParam = urlParams.get('month');
+      const yearParam = urlParams.get('year');
+      const [ defaultMonth, defaultYear ] = getDefaultMonth();
 
+      // set the songMonthPicker input
+      document.getElementById('songMonthPicker').value = [
+        `${ ( yearParam || defaultYear ) }`,
+        `${ ( monthParam || defaultMonth ) }`.padStart( 2, '0' ),
+      ].join('-');
+      
+      document.getElementById( 'songMonthPicker' ).addEventListener( 'change', handleMonthChange );
+      handleMonthChange();
+      ensureSongSelectModal();
+      
       const runForm = document.getElementById('runForm');
       let foldersOnlyMode = !0; // default to folders-only
       // Button event listeners to set mode and reset modal
@@ -301,6 +302,36 @@
     function icon( flag, yesLabel, yesIcon, noLabel, noIcon ) {
       return `<span title="${ flag ? yesLabel : noLabel }" style="margin-right:6px;">${ flag ? yesIcon : noIcon }</span>`;
     }
+
+
+    /**
+     * Get the default month based on current date
+     * 
+     * @return {[ month: number, year: number ]} month and year
+     */
+    function getDefaultMonth() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const day = now.getDate();
+      // If after the 15th, default to next month
+      let defaultMonth = month;
+      let defaultYear = year;
+      if ( day > 15 ) {
+        defaultMonth++;
+        if ( defaultMonth > 12 ) {
+          defaultMonth = 1;
+          defaultYear++;
+        }
+      }
+
+      return [ defaultMonth, defaultYear ];
+    }
+
+
+    /**
+     * Render the list of folders in the sidebar
+     */
     function renderFolderList(folders) {
       const list = document.getElementById('folder-list');
       // Build a map of current DOM items by folder name
@@ -323,7 +354,7 @@
         html += `<strong>${ folder.name }</strong>`;
         html += `<span class="ms-2" style="font-size:1.2em; margin-top:-2px">`;
 
-        html += icon( folder.hasFile,
+        html += icon( folder.hasPre,
           `PowerPoint file present. This is the main presentation file for this Sunday`,
           `<i class='fa fa-file-powerpoint-o' style='color:#d24726;font-size:0.8em;opacity:1;margin-right:2px'></i>`,
           `No PowerPoint file. This Sunday does not have a presentation file yet`,
@@ -408,6 +439,10 @@
       }
     }
 
+
+    /**
+     * Fetch and render the list of folders in the sidebar
+     */
     function fetchAndRenderFolders() {
       fetch('/api/folders')
         .then(res => res.json())
@@ -716,6 +751,35 @@
     window.addEventListener('popstate', setTabFromHash);
   </script>
   <script>
+    // --- SOCKET.IO CLIENT CONNECTION ---
+    (function() {
+      // Load socket.io client script dynamically if not present
+      function loadSocketIo(cb) {
+        if (window.io) return cb();
+        var script = document.createElement('script');
+        script.src = '/socket.io/socket.io.js';
+        script.onload = cb;
+        document.head.appendChild(script);
+      }
+      loadSocketIo(function() {
+        const socket = window.io();
+        socket.on('connect', function() {
+          console.log('[socket.io] Connected:', socket.id);
+        });
+        socket.on('disconnect', function() {
+          console.log('[socket.io] Disconnected');
+        });
+        socket.on('folder-changes', function(data) {
+          console.log('[socket.io] folder-changes event:', data);
+          // Optionally, show a toast/snackbar or refresh folder list
+          // if (typeof fetchAndRenderFolders === 'function') {
+          //   fetchAndRenderFolders();
+          // }
+        });
+      });
+    })();
+  </script>
+  <script>
     // --- SONG SELECTION BY WEEK/MONTH LOGIC ---
     // Helper: get all Sundays in a month
     function getSundaysInMonth(year, month) {
@@ -727,25 +791,19 @@
       }
       return sundays;
     }
-    // Helper: get month options (last 2, current, next 6)
+
+    /**
+     * Helper: get month options (last 4, current, and next 7 months)
+     */
     function getMonthOptions() {
       const now = new Date();
       let baseMonth = now.getMonth() + 1;
       let baseYear = now.getFullYear();
       // If after 15th, default to next month
-      let defaultMonth = baseMonth;
-      let defaultYear = baseYear;
-      if (now.getDate() > 15) {
-        if (baseMonth === 12) {
-          defaultMonth = 1;
-          defaultYear++;
-        } else {
-          defaultMonth++;
-        }
-      }
+      const [ defaultMonth, defaultYear ] = getDefaultMonth();
       const options = [];
       // Last 2 months
-      for (let i = -2; i <= 6; i++) {
+      for (let i = -4; i <= 7; i++) {
         let m = baseMonth + i;
         let y = baseYear;
         while (m < 1) { m += 12; y--; }
@@ -1067,17 +1125,27 @@
         body: JSON.stringify({ weekIdx, slot: 'choruses', choruses, date })
       });
     }
-    // --- END OF SONG SELECTION LOGIC ---
-    // Initial render
-    (function initSongSelectionTab() {
-      renderMonthDropdown();
-      document.getElementById('songMonthPicker').addEventListener('change', handleMonthChange);
-      handleMonthChange();
-      ensureSongSelectModal();
-    })();
+
     // Month dropdown event
     function handleMonthChange() {
       const [year, month] = document.getElementById('songMonthPicker').value.split('-').map(Number);
+      const [ defaultMonth, defaultYear ] = getDefaultMonth();
+
+      // If the selected month is not the default, add it as a GET parameter
+      const url = new URL(window.location.href);
+      if ( year !== defaultYear ) {
+        url.searchParams.set('year', year);
+      } else {
+        url.searchParams.delete('year');
+      }
+
+      if ( month !== defaultMonth ) {
+        url.searchParams.set('month', month);
+      } else {
+        url.searchParams.delete('month');
+      }
+      history.replaceState(null, '', url.toString());
+
       renderSongSelectionWeeks(year, month);
       fetchAndApplyWeekSelections(year, month); // <-- Load selections after rendering weeks
     }
