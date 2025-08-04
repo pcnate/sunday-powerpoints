@@ -648,7 +648,7 @@ const config = {
   templateDirectory: process.env.TEMPLATE_DIRECTORY || '/input',
   outputDirectory: process.env.OUTPUT_DIRECTORY || '/output',
   rootPath: process.env.ROOT_PATH || '%OneDriveConsumer%',
-  songsDirectory: process.env.SONGS_DIRECTORY || 'P:/songs' // default to P:/songs, fallback to /songs if not set
+  songsDirectory: process.env.SONGS_DIRECTORY || '/songs' // default to /songs if not set
 };
 
 if (!config.templateFile) {
@@ -693,13 +693,6 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
-
-// Determine static directory based on environment
-const staticDir = process.env.NODE_ENV === 'development'
-  ? path.join(__dirname, 'webapp')
-  : path.join(__dirname, '..', 'lib', 'src', 'webapp');
-
-app.use(express.static(staticDir));
 
 // API endpoint to list folders in outputDirectory
 app.get('/api/folders', async (request: Request, response: Response) => {
@@ -1394,10 +1387,17 @@ app.get('/api/webapp-last-modified', async (req: Request, res: Response) => {
   }
 });
 
+// Determine static directory based on environment
+const staticDir = process.env.NODE_ENV === 'development'
+  ? path.join( __dirname, 'webapp' )
+  : path.join( __dirname, '..', 'lib', 'src', 'webapp' );
+
 // Serve index.html for root
 app.get('/', (request: Request, response: Response) => {
-  response.sendFile(path.join(staticDir, 'index.html'));
+  response.sendFile(path.join(staticDir, 'index-old.html'));
 });
+
+app.use( express.static( staticDir ) );
 
 // Serve Bootstrap CSS and JS from node_modules in development
 if (process.env.NODE_ENV === 'development') {
