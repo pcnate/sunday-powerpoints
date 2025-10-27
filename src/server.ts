@@ -1043,12 +1043,15 @@ function getSundaysInMonth( year: number, month: number ) {
 
   // Find the first Sunday of the month
   date.setDate( ( 7 - date.getDay() ) % 7 + 1 ); // move to first Sunday of the month
+  // must deal with daylight saving time changes by using getTime() + offset
+  const offset = date.getTimezoneOffset() * 60 * 1000;
+
   const sundays: Date[] = [
-    new Date( date ), // 1-6th day of month
-    new Date( date.getTime() +  7 * 86_400_000 ), // 8-14th day of month
-    new Date( date.getTime() + 14 * 86_400_000 ), // 15-21st day of month
-    new Date( date.getTime() + 21 * 86_400_000 ), // 22-28th day of month
-    new Date( date.getTime() + 28 * 86_400_000 )  // 29-31st day of month
+    new Date( date.getTime() + offset ), // 1-6th day of month
+    new Date( date.getTime() + offset +  7 * 86_400_000 ), // 8-14th day of month
+    new Date( date.getTime() + offset + 14 * 86_400_000 ), // 15-21st day of month
+    new Date( date.getTime() + offset + 21 * 86_400_000 ), // 22-28th day of month
+    new Date( date.getTime() + offset + 28 * 86_400_000 )  // 29-31st day of month
   ];
 
   // Filter out any dates that are not in the requested month
