@@ -1,0 +1,21 @@
+.main-container {
+  height: 100vh;
+}
+.main-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.sidebar {
+  width: 300px;
+  min-width: 220px;
+  max-width: 350px;
+  box-shadow: -2px 0 8px rgba(0,0,0,0.03);
+  border-left: 1px solid #dee2e6;
+}
+mat-tab-group {
+  margin: 1rem;
+}
