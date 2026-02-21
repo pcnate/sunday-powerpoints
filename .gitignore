@@ -107,3 +107,12 @@ dist
 lib/
 
 .angular/cache/
+
+# Claude Code
+.claude/
+
+# Windows null device artifacts
+nul
+
+# Rust build output (worker)
+worker/target/

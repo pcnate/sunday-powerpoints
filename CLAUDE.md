@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate PowerPoint management for weekly church services. The system creates folders for each Sunday of the month, manages song shortcuts, tracks presentation files, and provides a web interface for song selection and file management.
+Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate PowerPoint management for weekly church services. The system creates folders for each Sunday of the month, manages song shortcuts, tracks presentation files, and provides a web interface for song selection and file management. It includes a job queue system for automated video processing (alignment, transcription, and AI-powered metadata extraction).
 
 ## Development Commands
 
@@ -31,40 +31,78 @@ Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate 
   - Test files: `tests/**/*.test.ts`
   - Generates coverage report
 
+- **Run single test**: `npx jest tests/jobs.test.ts`
+
 - **Angular development**: Not yet fully configured
   - Angular files are in `src/webapp/`
   - Configuration: `angular.json`
   - The Angular app is being migrated from an older implementation
 
-### Docker
+### API Documentation
 
-- **Build image**: `npm run docker:build`
-- **Run container**: `npm run docker:run`
-  - Mounts three volumes: `/input` (template), `/output` (sermon folders), `/songs`
-  - See `package.json` scripts for full docker commands with volume mappings
-- **Build and run**: `npm run docker:build-n-run`
-- **Stop and restart**: `npm run docker:stop-n-run`
-
-Note: The Docker image runs with ts-node (not compiled), so dev dependencies are included.
+- **Swagger UI**: Available at `http://localhost:8080/api-docs` when server is running
+- **OpenAPI spec**: `src/openapi.yaml` (also served at `/openapi.yaml`)
 
 ## Architecture
 
-### Dual Application Structure
-
-This project has two distinct parts that are loosely coupled:
+### Three-Part Application Structure
 
 1. **Node.js Backend** (`src/server.ts`, `src/sunday-powerpoints.ts`, `src/index.ts`)
    - Express server serving API endpoints and static files
    - Socket.IO for real-time updates to the frontend
+   - MySQL-backed job queue for video processing pipeline
    - Automated folder/file management for Sunday PowerPoint presentations
    - Windows shortcut (.lnk) management via `windows-shortcuts` library
    - Scheduled jobs using `node-schedule`
+   - Swagger UI at `/api-docs`
 
 2. **Angular Frontend** (`src/webapp/`)
    - Material Design UI (`@angular/material`)
    - Components for song selection, file browsing, theme toggle
    - Socket service for real-time server communication
    - Currently in migration (see commit `57bb0d8`)
+
+3. **Rust Worker** (`worker/` - planned)
+   - Windows system tray application for GPU-equipped machine
+   - Processes transcription and AI jobs during configured shift windows
+   - Communicates only via Express server REST API (no direct DB access)
+
+### Job Queue System
+
+The job queue processes a video pipeline for sermon recordings:
+
+**Pipeline**: Raw MP4s → Kdenlive project → Manual editing → Production MP4 → Whisper transcription → Claude Code processing
+
+**Key files:**
+- `src/db.ts` — MySQL connection pool with automatic migration runner
+- `src/types/job.ts` — TypeScript interfaces for all job-related types
+- `src/routes/jobs.ts` — Express Router for job CRUD + worker endpoints
+- `src/migrations/*.sql` — Database schema migrations (run automatically on startup)
+- `src/openapi.yaml` — Full API documentation
+
+**Job types:**
+- `video-alignment` — FFmpeg scene detection + Kdenlive project generation
+- `transcription` — Whisper speech-to-text on production MP4
+- `claude-processing` — Claude Code extracts sermon metadata from VTT
+
+**Job lifecycle:** `pending` → `processing` (claimed by worker) → `completed`/`failed`
+
+**Auto-detection:** `scanFolders()` runs every minute and:
+- Creates `video-alignment` jobs when 2+ raw MP4s found in `Vids/` without a production file
+- Creates `transcription` jobs when `YYYYMMDD-production.mp4` appears
+
+**Job chaining:** Completing a `transcription` job auto-creates a `claude-processing` job.
+
+**Stale recovery:** Every 2 minutes, jobs with heartbeats older than 2 minutes are recovered (retried or failed).
+
+### Database
+
+- **MySQL** on NAS, connection configured via `MYSQL_*` env vars
+- **Migrations** run automatically on server startup from `src/migrations/`
+- Migration files are numbered sequentially (e.g., `001_create_jobs_tables.sql`)
+- Each migration runs once; tracking via `migrations` table
+- Add new migrations as new numbered `.sql` files — never modify applied ones
+- Server continues without job system if MySQL is unavailable
 
 ### Core Backend Classes (server.ts)
 
@@ -106,9 +144,10 @@ This project has two distinct parts that are loosely coupled:
 
 ### Environment Configuration
 
-The application uses `.env` for configuration (excluded from Docker image):
+The application uses `.env` for configuration (see `.env.example` for all options):
 
 ```
+# Server
 PORT=8080
 TEMPLATE_FILE=Sunday Template.pptx
 EXT=pptx
@@ -116,9 +155,17 @@ TEMPLATE_DIRECTORY=<path to template directory>
 OUTPUT_DIRECTORY=<path to output directory>
 SONGS_DIRECTORY=<path to songs directory>
 ROOT_PATH=%OneDriveConsumer%
-```
 
-Docker runtime overrides these via `-e` flags and volume mounts.
+# MySQL (optional - server runs without it)
+MYSQL_HOST=192.168.1.50
+MYSQL_PORT=3306
+MYSQL_USER=sunday_powerpoints
+MYSQL_PASSWORD=<password>
+MYSQL_DATABASE=sunday_powerpoints
+
+# Job system tuning
+HEARTBEAT_TIMEOUT_MS=120000
+```
 
 ### TypeScript Configuration
 
@@ -141,26 +188,43 @@ The root TypeScript config excludes the Angular webapp to avoid conflicts.
 
 - This application is **Windows-dependent** due to `windows-shortcuts` library
 - Shortcuts use Windows environment variable syntax (`%OneDriveConsumer%`)
-- Docker feasibility depends on whether shortcuts work in Linux containers (see roadmap)
+- Docker was abandoned due to Windows shortcuts incompatibility
 
 ### File System Operations
 
 - Template files are located via `TEMPLATE_DIRECTORY + TEMPLATE_FILE`
 - Output folders follow pattern: `OUTPUT_DIRECTORY/YYYYMMDD/`
 - Songs are referenced by creating shortcuts (.lnk files) in each Sunday folder
+- Video files live in `OUTPUT_DIRECTORY/YYYYMMDD/Vids/`
+- Production MP4 naming: `YYYYMMDD-production.mp4`
+- Kdenlive projects: `YYYYMMDD.kdenlive`
 
 ### Socket.IO Communication
 
 The backend emits real-time updates to connected clients:
-- Folder updates when new folders are created
-- Song selection changes
-- File system changes
+- `folder-changes` — Folder updates when content changes
+- `job:created` — New job added to queue
+- `job:updated` — Job status changed (claimed, completed, failed, recovered)
+- `job:log` — New log entries for a job
+
+### API Routes
+
+All REST endpoints documented in Swagger UI (`/api-docs`). Key groups:
+- `/api/folders` — Folder listing and thumbnails
+- `/api/songs` — Song library and selection
+- `/api/notes` — Sermon notes CRUD
+- `/api/jobs` — Job queue management
+- `/api/jobs/next`, `/api/jobs/:id/heartbeat`, etc. — Worker communication endpoints
 
 ## Testing Strategy
 
 Tests are located in `tests/` and use Jest with TypeScript support. The test configuration (`jest.config.js`) runs tests matching `**/tests/**/*.test.ts`.
 
-Run a single test: `npx jest tests/sunday-powerpoints.test.ts`
+- `tests/sunday-powerpoints.test.ts` — Core utility tests
+- `tests/jobs.test.ts` — Job queue system tests (DB mocked, logic verified)
+
+Run all tests: `npm test`
+Run a single test: `npx jest tests/jobs.test.ts`
 
 ## Roadmap and Active Tasks
 
