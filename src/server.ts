@@ -8,6 +8,10 @@ const schedule = require('node-schedule');
 import { createShortcut } from './sunday-powerpoints';
 import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
+import { initDb, closeDb } from './db';
+import { createJobRoutes, recoverStaleJobs, createJobIfNotExists } from './routes/jobs';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yaml';
 
 dotenv.config();
 
@@ -686,6 +690,13 @@ io.on('connection', (socket) => {
   });
 });
 
+// Swagger UI
+const openapiSpec = YAML.parse( fs.readFileSync( path.join( __dirname, 'openapi.yaml' ), 'utf-8' ) );
+app.use( '/api-docs', swaggerUi.serve, swaggerUi.setup( openapiSpec ) );
+app.get( '/openapi.yaml', ( _req: Request, res: Response ) => {
+  res.type( 'text/yaml' ).send( fs.readFileSync( path.join( __dirname, 'openapi.yaml' ), 'utf-8' ) );
+});
+
 // Log all /api requests, except /api/webapp-last-modified
 app.use('/api', (req, res, next) => {
   if (req.originalUrl !== '/api/webapp-last-modified') {
@@ -693,6 +704,9 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
+
+// Mount job API routes
+app.use( '/api/jobs', createJobRoutes( io ) );
 
 // API endpoint to list folders in outputDirectory
 app.get('/api/folders', async (request: Request, response: Response) => {
@@ -1103,6 +1117,61 @@ async function scanFolders() {
   }
 
   console.log( `Scanned ${ sundayFolders.size } folders in ${ outputDir }` );
+
+  // Auto-detect videos and create jobs (only if DB is available)
+  try {
+    const { healthCheck } = require( './db' );
+    if ( !await healthCheck() ) return;
+
+    for ( const key of Object.keys( sundayFolders.cache ) ) {
+      const folder = sundayFolders.cache[key];
+      const vidsDir = path.join( folder.path, 'Vids' );
+
+      let videoFiles: string[] = [];
+      try {
+        videoFiles = await fs.promises.readdir( vidsDir );
+      } catch {
+        continue; // No Vids/ directory
+      }
+
+      const mp4Files = videoFiles.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
+      const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
+      const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
+
+      if ( rawMp4s.length >= 2 && !productionFile ) {
+        // Two+ raw MP4s without a production file: create video-alignment job
+        const job = await createJobIfNotExists({
+          type: 'video-alignment',
+          sunday_date: key.replace( /-/g, '' ),
+          input_path: vidsDir,
+          output_path: path.join( vidsDir, `${ key.replace( /-/g, '' ) }.kdenlive` ),
+          metadata: { camera_files: rawMp4s.map( f => path.join( vidsDir, f ) ) },
+        });
+        if ( job ) {
+          io.emit( 'job:created', job );
+          console.log( `[JOBS] Auto-created video-alignment job #${ job.id } for ${ key }` );
+        }
+      }
+
+      if ( productionFile ) {
+        // Production MP4 exists: create transcription job if none exists
+        const productionPath = path.join( vidsDir, productionFile );
+        const job = await createJobIfNotExists({
+          type: 'transcription',
+          sunday_date: key.replace( /-/g, '' ),
+          input_path: productionPath,
+          output_path: productionPath.replace( /\.mp4$/i, '.vtt' ),
+          metadata: { whisper_model: 'large-v3', language: 'en' },
+        });
+        if ( job ) {
+          io.emit( 'job:created', job );
+          console.log( `[JOBS] Auto-created transcription job #${ job.id } for ${ key }` );
+        }
+      }
+    }
+  } catch ( err ) {
+    // DB not available or other error — silently skip job detection
+  }
 }
 
 
@@ -1445,11 +1514,37 @@ function setupExpressEndpoints() {
 // move all global logic and variables down here
 
 setupExpressEndpoints();
-// Schedule: 2nd Monday of every month at midnight
-schedule.scheduleJob('0 0 * * 1', scheduleFolderCreation );
-schedule.scheduleJob('* * * * *', scanFolders );
 
-const PORT = process?.env?.PORT || 8080;
-server.listen( PORT, () => {
-  console.log(`Web server (with socket.io) listening on port ${ PORT }`);
+// Initialize database and start server
+( async () => {
+  try {
+    await initDb();
+    console.log( '[DB] Database initialized successfully' );
+  } catch ( err ) {
+    console.error( '[DB] Failed to initialize database:', err );
+    console.warn( '[DB] Server will continue without job system. Set MYSQL_* env vars to enable.' );
+  }
+
+  // Schedule: 2nd Monday of every month at midnight
+  schedule.scheduleJob( '0 0 * * 1', scheduleFolderCreation );
+  schedule.scheduleJob( '* * * * *', scanFolders );
+  // Recover stale jobs every 2 minutes
+  schedule.scheduleJob( '*/2 * * * *', () => recoverStaleJobs( io ) );
+
+  const PORT = process?.env?.PORT || 8080;
+  server.listen( PORT, () => {
+    console.log( `Web server (with socket.io) listening on port ${ PORT }` );
+  });
+})();
+
+// Graceful shutdown
+process.on( 'SIGTERM', async () => {
+  console.log( 'SIGTERM received, shutting down...' );
+  await closeDb();
+  process.exit( 0 );
+});
+process.on( 'SIGINT', async () => {
+  console.log( 'SIGINT received, shutting down...' );
+  await closeDb();
+  process.exit( 0 );
 });

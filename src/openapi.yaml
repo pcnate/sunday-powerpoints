@@ -1,0 +1,788 @@
+openapi: 3.0.3
+info:
+  title: Sunday PowerPoints API
+  description: API for managing weekly church service PowerPoint presentations, songs, and the video processing job system.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Folders
+    description: Sunday folder management
+  - name: Songs
+    description: Song library and selection
+  - name: Notes
+    description: Sermon notes
+  - name: Admin
+    description: Administrative operations
+  - name: Jobs
+    description: Job queue for video processing pipeline
+  - name: Worker
+    description: Endpoints used by the Rust worker to process jobs
+
+paths:
+  # --- Folders ---
+  /api/folders:
+    get:
+      tags: [Folders]
+      summary: List all Sunday folders
+      description: Returns all YYYYMMDD folders found in the output directory with their metadata.
+      responses:
+        '200':
+          description: Array of Sunday folder objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SundayFolder'
+
+  /api/thumbnail/{folder}:
+    get:
+      tags: [Folders]
+      summary: Get folder thumbnail
+      parameters:
+        - name: folder
+          in: path
+          required: true
+          schema:
+            type: string
+          description: YYYYMMDD folder name
+      responses:
+        '200':
+          description: JPEG thumbnail image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Thumbnail not found
+
+  /api/template-info:
+    get:
+      tags: [Admin]
+      summary: Get template file info
+      responses:
+        '200':
+          description: Template file metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templateFile:
+                    type: string
+                  ext:
+                    type: string
+
+  # --- Songs ---
+  /api/songs:
+    get:
+      tags: [Songs]
+      summary: List all available songs
+      description: Recursively walks the songs directory and returns all song files.
+      responses:
+        '200':
+          description: Array of song objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SongFile'
+
+  /api/week-song-selections:
+    get:
+      tags: [Songs]
+      summary: Get song selections for a month
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: year
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Song and chorus selections per week
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /api/update-song:
+    post:
+      tags: [Songs]
+      summary: Update song selection for a week
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, slot, song]
+              properties:
+                date:
+                  type: string
+                  pattern: '^\d{8}$'
+                weekIdx:
+                  type: integer
+                slot:
+                  type: integer
+                song:
+                  type: object
+      responses:
+        '200':
+          description: Update result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  status:
+                    type: string
+
+  /api/chorus-update:
+    post:
+      tags: [Songs]
+      summary: Update chorus selections for a week
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Update result
+
+  # --- Notes ---
+  /api/notes:
+    get:
+      tags: [Notes]
+      summary: Get notes for a Sunday
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+      responses:
+        '200':
+          description: Notes content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+        '404':
+          description: Notes not found
+    post:
+      tags: [Notes]
+      summary: Update notes for a Sunday
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, content]
+              properties:
+                date:
+                  type: string
+                content:
+                  type: string
+      responses:
+        '200':
+          description: Notes saved
+
+  # --- Admin ---
+  /api/run-folders:
+    post:
+      tags: [Admin]
+      summary: Create folders for a month
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [month, year]
+              properties:
+                month:
+                  type: integer
+                year:
+                  type: integer
+                write:
+                  type: boolean
+      responses:
+        '200':
+          description: Result of folder creation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+
+  /api/copy-template:
+    post:
+      tags: [Admin]
+      summary: Copy template to all Sundays
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [month, year]
+              properties:
+                month:
+                  type: integer
+                year:
+                  type: integer
+                write:
+                  type: boolean
+      responses:
+        '200':
+          description: Result of template copy
+
+  # --- Jobs ---
+  /api/jobs:
+    get:
+      tags: [Jobs]
+      summary: List jobs
+      description: Returns paginated, filterable list of jobs.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+          description: Comma-separated statuses (pending, queued, processing, completed, failed, cancelled)
+        - name: type
+          in: query
+          schema:
+            type: string
+          description: Comma-separated types (video-alignment, transcription, claude-processing)
+        - name: sunday_date
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Paginated job list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobListResponse'
+
+    post:
+      tags: [Jobs]
+      summary: Create a new job
+      description: Creates a job. Rejects duplicates of the same type + sunday_date that are pending/queued/processing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '201':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '409':
+          description: Duplicate job exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  existing_id:
+                    type: integer
+
+  /api/jobs/{id}:
+    get:
+      tags: [Jobs]
+      summary: Get job details
+      description: Returns the full job record plus the latest 100 log entries.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Job with logs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Job'
+                  - type: object
+                    properties:
+                      logs:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/JobLog'
+        '404':
+          description: Job not found
+
+    put:
+      tags: [Jobs]
+      summary: Update job
+      description: Update priority or cancel a job. Only status change to "cancelled" is allowed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                priority:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                status:
+                  type: string
+                  enum: [cancelled]
+      responses:
+        '200':
+          description: Updated job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /api/jobs/next:
+    post:
+      tags: [Worker]
+      summary: Claim next available job
+      description: Atomically claims the highest-priority pending job matching the requested types. Uses SELECT FOR UPDATE SKIP LOCKED.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimJobRequest'
+      responses:
+        '200':
+          description: Job claimed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job:
+                    $ref: '#/components/schemas/Job'
+        '204':
+          description: No jobs available
+
+  /api/jobs/{id}/heartbeat:
+    post:
+      tags: [Worker]
+      summary: Send heartbeat
+      description: Worker sends periodic heartbeat while processing. Returns continue=false if job was cancelled.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+      responses:
+        '200':
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '403':
+          description: Worker does not own this job
+
+  /api/jobs/{id}/complete:
+    post:
+      tags: [Worker]
+      summary: Mark job completed
+      description: Worker marks job as completed. Triggers job chaining (transcription -> claude-processing).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteJobRequest'
+      responses:
+        '200':
+          description: Job completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /api/jobs/{id}/fail:
+    post:
+      tags: [Worker]
+      summary: Mark job failed
+      description: Worker marks job as failed. Auto-retries if under max_retries, otherwise marks permanently failed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailJobRequest'
+      responses:
+        '200':
+          description: Failure recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  will_retry:
+                    type: boolean
+                  retry_count:
+                    type: integer
+
+  /api/jobs/{id}/logs:
+    post:
+      tags: [Worker]
+      summary: Send log entries
+      description: Worker sends stdout/stderr log entries for a job.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries]
+              properties:
+                entries:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/JobLogEntry'
+      responses:
+        '200':
+          description: Logs recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+
+components:
+  schemas:
+    Job:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [video-alignment, transcription, claude-processing]
+        status:
+          type: string
+          enum: [pending, queued, processing, completed, failed, cancelled]
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+        sunday_date:
+          type: string
+          pattern: '^\d{8}$'
+        input_path:
+          type: string
+        output_path:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        worker_id:
+          type: string
+          nullable: true
+        retry_count:
+          type: integer
+        max_retries:
+          type: integer
+        parent_job_id:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        heartbeat_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    JobLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        job_id:
+          type: integer
+        level:
+          type: string
+          enum: [info, warn, error, debug]
+        message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    JobListResponse:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    CreateJobRequest:
+      type: object
+      required: [type, sunday_date, input_path]
+      properties:
+        type:
+          type: string
+          enum: [video-alignment, transcription, claude-processing]
+        sunday_date:
+          type: string
+          pattern: '^\d{8}$'
+        input_path:
+          type: string
+        output_path:
+          type: string
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+        metadata:
+          type: object
+        parent_job_id:
+          type: integer
+        max_retries:
+          type: integer
+          default: 3
+
+    ClaimJobRequest:
+      type: object
+      required: [worker_id, types]
+      properties:
+        worker_id:
+          type: string
+        types:
+          type: array
+          items:
+            type: string
+            enum: [video-alignment, transcription, claude-processing]
+
+    HeartbeatRequest:
+      type: object
+      required: [worker_id]
+      properties:
+        worker_id:
+          type: string
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    HeartbeatResponse:
+      type: object
+      properties:
+        continue:
+          type: boolean
+
+    CompleteJobRequest:
+      type: object
+      required: [worker_id]
+      properties:
+        worker_id:
+          type: string
+        output_path:
+          type: string
+        metadata:
+          type: object
+
+    FailJobRequest:
+      type: object
+      required: [worker_id, error_message]
+      properties:
+        worker_id:
+          type: string
+        error_message:
+          type: string
+
+    JobLogEntry:
+      type: object
+      required: [message]
+      properties:
+        level:
+          type: string
+          enum: [info, warn, error, debug]
+          default: info
+        message:
+          type: string
+
+    SundayFolder:
+      type: object
+      properties:
+        name:
+          type: string
+          description: YYYYMMDD format
+        path:
+          type: string
+        presentation:
+          type: string
+          nullable: true
+        thumbnail:
+          type: string
+          nullable: true
+        video:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              camera:
+                type: string
+              type:
+                type: string
+                enum: [mp4, mts]
+        song1:
+          $ref: '#/components/schemas/Song'
+        song2:
+          $ref: '#/components/schemas/Song'
+        song3:
+          $ref: '#/components/schemas/Song'
+        choruses:
+          type: array
+          items:
+            type: object
+        hasNotes:
+          type: string
+          nullable: true
+        archived:
+          type: boolean
+        backlog:
+          type: boolean
+
+    Song:
+      type: object
+      nullable: true
+      properties:
+        name:
+          type: string
+        prefix:
+          type: string
+        path:
+          type: string
+        target:
+          type: string
+        number:
+          type: string
+        book:
+          type: string
+
+    SongFile:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        book:
+          type: string
