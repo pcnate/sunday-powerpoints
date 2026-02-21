@@ -12,6 +12,12 @@ export interface DbConfig {
   database: string;
 }
 
+
+/**
+ * Get the database configuration from environment variables.
+ *
+ * @returns database connection configuration
+ */
 export function getDbConfig(): DbConfig {
   return {
     host: process.env.MYSQL_HOST || 'localhost',
@@ -22,6 +28,12 @@ export function getDbConfig(): DbConfig {
   };
 }
 
+
+/**
+ * Initialize the database connection pool and run pending migrations.
+ *
+ * @returns the MySQL connection pool
+ */
 export async function initDb(): Promise<Pool> {
   if ( pool ) return pool;
 
@@ -50,11 +62,21 @@ export async function initDb(): Promise<Pool> {
   return pool;
 }
 
+
+/**
+ * Get the current database connection pool.
+ *
+ * @returns the active connection pool
+ */
 export function getPool(): Pool {
   if ( !pool ) throw new Error( 'Database not initialized. Call initDb() first.' );
   return pool;
 }
 
+
+/**
+ * Close the database connection pool gracefully.
+ */
 export async function closeDb(): Promise<void> {
   if ( pool ) {
     await pool.end();
@@ -63,6 +85,12 @@ export async function closeDb(): Promise<void> {
   }
 }
 
+
+/**
+ * Check if the database connection is healthy.
+ *
+ * @returns true if the database is reachable
+ */
 export async function healthCheck(): Promise<boolean> {
   try {
     const p = getPool();
@@ -75,6 +103,11 @@ export async function healthCheck(): Promise<boolean> {
 
 // --- Migration Runner ---
 
+/**
+ * Create the migrations tracking table if it does not exist.
+ *
+ * @param connection - active database connection
+ */
 async function ensureMigrationsTable( connection: PoolConnection ): Promise<void> {
   await connection.query( `
     CREATE TABLE IF NOT EXISTS migrations (
@@ -85,11 +118,24 @@ async function ensureMigrationsTable( connection: PoolConnection ): Promise<void
   ` );
 }
 
+
+/**
+ * Get the set of already-applied migration names.
+ *
+ * @param connection - active database connection
+ * @returns set of applied migration names
+ */
 async function getAppliedMigrations( connection: PoolConnection ): Promise<Set<string>> {
-  const [rows] = await connection.query<RowDataPacket[]>( 'SELECT name FROM migrations ORDER BY id' );
+  const [ rows ] = await connection.query<RowDataPacket[]>( 'SELECT name FROM migrations ORDER BY id' );
   return new Set( rows.map( row => row.name ) );
 }
 
+
+/**
+ * Run all pending SQL migrations from the migrations directory.
+ *
+ * @param p - MySQL connection pool
+ */
 async function runMigrations( p: Pool ): Promise<void> {
   const migrationsDir = path.join( __dirname, 'migrations' );
 
@@ -137,7 +183,7 @@ async function runMigrations( p: Pool ): Promise<void> {
         }
         await connection.query(
           'INSERT INTO migrations (name) VALUES (?)',
-          [migrationName]
+          [ migrationName ]
         );
         await connection.commit();
         console.log( `[DB] Migration applied: ${ migrationName }` );

@@ -7,9 +7,15 @@ import {
   CompleteJobRequest, FailJobRequest, JobLogEntry, JobListQuery
 } from '../types/job';
 
-const JOB_TYPES = ['video-alignment', 'transcription', 'claude-processing'];
-const JOB_STATUSES = ['pending', 'queued', 'processing', 'completed', 'failed', 'cancelled'];
+const JOB_TYPES = [ 'video-alignment', 'transcription', 'claude-processing' ];
+const JOB_STATUSES = [ 'pending', 'queued', 'processing', 'completed', 'failed', 'cancelled' ];
 
+/**
+ * Create the Express Router for all job API endpoints.
+ *
+ * @param io - Socket.IO server instance for real-time events
+ * @returns Express Router with job routes mounted
+ */
 export function createJobRoutes( io: SocketIOServer ): Router {
   const router = Router();
 
@@ -34,16 +40,16 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const pool = getPool();
 
       // Check for duplicate pending/processing job of same type + sunday_date
-      const [existing] = await pool.query<RowDataPacket[]>(
+      const [ existing ] = await pool.query<RowDataPacket[]>(
         `SELECT id FROM jobs WHERE type = ? AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
-        [body.type, body.sunday_date]
+        [ body.type, body.sunday_date ]
       );
       if ( existing.length > 0 ) {
-        res.status( 409 ).json({ error: 'A job of this type already exists for this date', existing_id: existing[0].id });
+        res.status( 409 ).json({ error: 'A job of this type already exists for this date', existing_id: existing[ 0 ].id });
         return;
       }
 
-      const [result] = await pool.query<ResultSetHeader>(
+      const [ result ] = await pool.query<ResultSetHeader>(
         `INSERT INTO jobs (type, status, priority, sunday_date, input_path, output_path, metadata, parent_job_id, max_retries)
          VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -58,8 +64,8 @@ export function createJobRoutes( io: SocketIOServer ): Router {
         ]
       );
 
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [result.insertId] );
-      const job = parseJobRow( rows[0] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
+      const job = parseJobRow( rows[ 0 ] );
 
       io.emit( 'job:created', job );
       console.log( `[JOBS] Created job #${ job.id } (${ job.type }) for ${ job.sunday_date }` );
@@ -69,7 +75,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error creating job:', err );
       res.status( 500 ).json({ error: 'Failed to create job' });
     }
-  });
+  } );
 
   // GET /api/jobs - List/filter jobs
   router.get( '/', async ( req: Request, res: Response ) => {
@@ -105,14 +111,14 @@ export function createJobRoutes( io: SocketIOServer ): Router {
         params.push( query.sunday_date );
       }
 
-      const [countRows] = await pool.query<RowDataPacket[]>(
+      const [ countRows ] = await pool.query<RowDataPacket[]>(
         `SELECT COUNT(*) as total FROM jobs ${ where }`, params
       );
-      const total = countRows[0].total;
+      const total = countRows[ 0 ].total;
 
-      const [rows] = await pool.query<RowDataPacket[]>(
+      const [ rows ] = await pool.query<RowDataPacket[]>(
         `SELECT * FROM jobs ${ where } ORDER BY priority ASC, created_at DESC LIMIT ? OFFSET ?`,
-        [...params, query.limit, query.offset]
+        [ ...params, query.limit, query.offset ]
       );
 
       res.json({
@@ -125,33 +131,33 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error listing jobs:', err );
       res.status( 500 ).json({ error: 'Failed to list jobs' });
     }
-  });
+  } );
 
   // GET /api/jobs/:id - Get job details with recent logs
   router.get( '/:id', async ( req: Request, res: Response ) => {
     try {
       const pool = getPool();
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
 
       if ( rows.length === 0 ) {
         res.status( 404 ).json({ error: 'Job not found' });
         return;
       }
 
-      const [logRows] = await pool.query<RowDataPacket[]>(
+      const [ logRows ] = await pool.query<RowDataPacket[]>(
         'SELECT * FROM job_logs WHERE job_id = ? ORDER BY created_at DESC LIMIT 100',
-        [req.params.id]
+        [ req.params.id ]
       );
 
       res.json({
-        ...parseJobRow( rows[0] ),
+        ...parseJobRow( rows[ 0 ] ),
         logs: logRows as JobLog[],
       });
     } catch ( err ) {
       console.error( '[JOBS] Error getting job:', err );
       res.status( 500 ).json({ error: 'Failed to get job' });
     }
-  });
+  } );
 
   // PUT /api/jobs/:id - Update job (priority, cancel)
   router.put( '/:id', async ( req: Request, res: Response ) => {
@@ -159,7 +165,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const pool = getPool();
       const { priority, status } = req.body;
 
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
       if ( rows.length === 0 ) {
         res.status( 404 ).json({ error: 'Job not found' });
         return;
@@ -178,7 +184,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       }
 
       if ( status === 'cancelled' ) {
-        const currentStatus = rows[0].status;
+        const currentStatus = rows[ 0 ].status;
         if ( currentStatus === 'completed' || currentStatus === 'cancelled' ) {
           res.status( 400 ).json({ error: `Cannot cancel a job with status '${ currentStatus }'` });
           return;
@@ -198,8 +204,8 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       params.push( req.params.id );
       await pool.query( `UPDATE jobs SET ${ updates.join( ', ' ) } WHERE id = ?`, params );
 
-      const [updated] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
-      const job = parseJobRow( updated[0] );
+      const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
+      const job = parseJobRow( updated[ 0 ] );
 
       io.emit( 'job:updated', job );
       res.json( job );
@@ -207,7 +213,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error updating job:', err );
       res.status( 500 ).json({ error: 'Failed to update job' });
     }
-  });
+  } );
 
   // POST /api/jobs/next - Worker claims next available job (atomic)
   router.post( '/next', async ( req: Request, res: Response ) => {
@@ -236,7 +242,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
         await connection.beginTransaction();
 
         const placeholders = validTypes.map( () => '?' ).join( ',' );
-        const [rows] = await connection.query<RowDataPacket[]>(
+        const [ rows ] = await connection.query<RowDataPacket[]>(
           `SELECT * FROM jobs
            WHERE status = 'pending' AND type IN (${ placeholders })
            ORDER BY priority ASC, created_at ASC
@@ -251,16 +257,16 @@ export function createJobRoutes( io: SocketIOServer ): Router {
           return;
         }
 
-        const jobRow = rows[0];
+        const jobRow = rows[ 0 ];
         await connection.query(
           `UPDATE jobs SET status = 'processing', worker_id = ?, started_at = NOW(), heartbeat_at = NOW() WHERE id = ?`,
-          [body.worker_id, jobRow.id]
+          [ body.worker_id, jobRow.id ]
         );
 
         await connection.commit();
 
-        const [updated] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [jobRow.id] );
-        const job = parseJobRow( updated[0] );
+        const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ jobRow.id ] );
+        const job = parseJobRow( updated[ 0 ] );
 
         io.emit( 'job:updated', job );
         console.log( `[JOBS] Worker '${ body.worker_id }' claimed job #${ job.id } (${ job.type })` );
@@ -276,7 +282,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error claiming job:', err );
       res.status( 500 ).json({ error: 'Failed to claim job' });
     }
-  });
+  } );
 
   // POST /api/jobs/:id/heartbeat - Worker sends heartbeat
   router.post( '/:id/heartbeat', async ( req: Request, res: Response ) => {
@@ -284,19 +290,19 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const body: HeartbeatRequest = req.body;
       const pool = getPool();
 
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
       if ( rows.length === 0 ) {
         res.status( 404 ).json({ error: 'Job not found' });
         return;
       }
 
-      const job = rows[0];
+      const job = rows[ 0 ];
       if ( job.worker_id !== body.worker_id ) {
         res.status( 403 ).json({ error: 'Worker does not own this job' });
         return;
       }
 
-      const updateFields = ['heartbeat_at = NOW()'];
+      const updateFields = [ 'heartbeat_at = NOW()' ];
       const params: unknown[] = [];
 
       if ( body.progress !== undefined ) {
@@ -315,7 +321,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error processing heartbeat:', err );
       res.status( 500 ).json({ error: 'Failed to process heartbeat' });
     }
-  });
+  } );
 
   // POST /api/jobs/:id/complete - Worker marks job as completed
   router.post( '/:id/complete', async ( req: Request, res: Response ) => {
@@ -323,13 +329,13 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const body: CompleteJobRequest = req.body;
       const pool = getPool();
 
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
       if ( rows.length === 0 ) {
         res.status( 404 ).json({ error: 'Job not found' });
         return;
       }
 
-      const job = rows[0];
+      const job = rows[ 0 ];
       if ( job.worker_id !== body.worker_id ) {
         res.status( 403 ).json({ error: 'Worker does not own this job' });
         return;
@@ -339,7 +345,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
         return;
       }
 
-      const updateFields = ["status = 'completed'", 'completed_at = NOW()'];
+      const updateFields = [ "status = 'completed'", 'completed_at = NOW()' ];
       const params: unknown[] = [];
 
       if ( body.output_path ) {
@@ -356,8 +362,8 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       params.push( req.params.id );
       await pool.query( `UPDATE jobs SET ${ updateFields.join( ', ' ) } WHERE id = ?`, params );
 
-      const [updated] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
-      const completedJob = parseJobRow( updated[0] );
+      const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
+      const completedJob = parseJobRow( updated[ 0 ] );
 
       io.emit( 'job:updated', completedJob );
       console.log( `[JOBS] Job #${ completedJob.id } (${ completedJob.type }) completed` );
@@ -370,7 +376,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error completing job:', err );
       res.status( 500 ).json({ error: 'Failed to complete job' });
     }
-  });
+  } );
 
   // POST /api/jobs/:id/fail - Worker marks job as failed
   router.post( '/:id/fail', async ( req: Request, res: Response ) => {
@@ -378,13 +384,13 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const body: FailJobRequest = req.body;
       const pool = getPool();
 
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
       if ( rows.length === 0 ) {
         res.status( 404 ).json({ error: 'Job not found' });
         return;
       }
 
-      const job = rows[0];
+      const job = rows[ 0 ];
       if ( job.worker_id !== body.worker_id ) {
         res.status( 403 ).json({ error: 'Worker does not own this job' });
         return;
@@ -396,17 +402,17 @@ export function createJobRoutes( io: SocketIOServer ): Router {
         await pool.query(
           `UPDATE jobs SET status = 'pending', worker_id = NULL, started_at = NULL, heartbeat_at = NULL,
            retry_count = retry_count + 1, error_message = ? WHERE id = ?`,
-          [body.error_message, req.params.id]
+          [ body.error_message, req.params.id ]
         );
       } else {
         await pool.query(
           `UPDATE jobs SET status = 'failed', error_message = ?, completed_at = NOW() WHERE id = ?`,
-          [body.error_message, req.params.id]
+          [ body.error_message, req.params.id ]
         );
       }
 
-      const [updated] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [req.params.id] );
-      const failedJob = parseJobRow( updated[0] );
+      const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
+      const failedJob = parseJobRow( updated[ 0 ] );
 
       io.emit( 'job:updated', failedJob );
       console.log( `[JOBS] Job #${ failedJob.id } (${ failedJob.type }) failed: ${ body.error_message }${ willRetry ? ` (will retry, attempt ${ failedJob.retry_count }/${ failedJob.max_retries })` : ' (no retries left)' }` );
@@ -416,7 +422,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error failing job:', err );
       res.status( 500 ).json({ error: 'Failed to fail job' });
     }
-  });
+  } );
 
   // POST /api/jobs/:id/logs - Worker sends log entries
   router.post( '/:id/logs', async ( req: Request, res: Response ) => {
@@ -429,16 +435,16 @@ export function createJobRoutes( io: SocketIOServer ): Router {
 
       const pool = getPool();
 
-      const [rows] = await pool.query<RowDataPacket[]>( 'SELECT id FROM jobs WHERE id = ?', [req.params.id] );
+      const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT id FROM jobs WHERE id = ?', [ req.params.id ] );
       if ( rows.length === 0 ) {
         res.status( 404 ).json({ error: 'Job not found' });
         return;
       }
 
-      const values = entries.map( e => [req.params.id, e.level || 'info', e.message] );
+      const values = entries.map( e => [ req.params.id, e.level || 'info', e.message ] );
       await pool.query(
         'INSERT INTO job_logs (job_id, level, message) VALUES ?',
-        [values]
+        [ values ]
       );
 
       io.emit( 'job:log', { job_id: parseInt( req.params.id ), entries } );
@@ -447,13 +453,20 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       console.error( '[JOBS] Error writing job logs:', err );
       res.status( 500 ).json({ error: 'Failed to write job logs' });
     }
-  });
+  } );
 
   return router;
 }
 
 // --- Job Chaining ---
 
+/**
+ * Handle automatic job chaining after a job completes.
+ * Transcription completion triggers claude-processing creation.
+ *
+ * @param job - the completed job
+ * @param io - Socket.IO server for emitting events
+ */
 async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> {
   const pool = getPool();
 
@@ -480,9 +493,9 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
       const outputDirectory = process.env.OUTPUT_DIRECTORY || '/output';
       const notesPath = require( 'path' ).join( outputDirectory, job.sunday_date, `${ job.sunday_date } Notes.txt` );
 
-      const [existing] = await pool.query<RowDataPacket[]>(
+      const [ existing ] = await pool.query<RowDataPacket[]>(
         `SELECT id FROM jobs WHERE type = 'claude-processing' AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
-        [job.sunday_date]
+        [ job.sunday_date ]
       );
 
       if ( existing.length > 0 ) {
@@ -490,7 +503,7 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
         return;
       }
 
-      const [result] = await pool.query<ResultSetHeader>(
+      const [ result ] = await pool.query<ResultSetHeader>(
         `INSERT INTO jobs (type, status, priority, sunday_date, input_path, output_path, metadata, parent_job_id)
          VALUES ('claude-processing', 'pending', ?, ?, ?, ?, ?, ?)`,
         [
@@ -503,8 +516,8 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
         ]
       );
 
-      const [newRows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [result.insertId] );
-      const newJob = parseJobRow( newRows[0] );
+      const [ newRows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
+      const newJob = parseJobRow( newRows[ 0 ] );
       io.emit( 'job:created', newJob );
       console.log( `[JOBS] Chained claude-processing job #${ newJob.id } from transcription job #${ job.id }` );
       break;
@@ -520,15 +533,20 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
 
 // --- Stale Job Recovery ---
 
+/**
+ * Recover jobs with stale heartbeats by retrying or marking as failed.
+ *
+ * @param io - Socket.IO server for emitting events
+ */
 export async function recoverStaleJobs( io: SocketIOServer ): Promise<void> {
   try {
     const pool = getPool();
     const timeoutMs = parseInt( process.env.HEARTBEAT_TIMEOUT_MS || '120000', 10 );
     const cutoff = new Date( Date.now() - timeoutMs );
 
-    const [staleRows] = await pool.query<RowDataPacket[]>(
+    const [ staleRows ] = await pool.query<RowDataPacket[]>(
       `SELECT id, retry_count, max_retries FROM jobs WHERE status = 'processing' AND heartbeat_at < ?`,
-      [cutoff]
+      [ cutoff ]
     );
 
     for ( const row of staleRows ) {
@@ -538,7 +556,7 @@ export async function recoverStaleJobs( io: SocketIOServer ): Promise<void> {
            retry_count = retry_count + 1,
            error_message = CONCAT( COALESCE(error_message, ''), '\nRecovered from stale heartbeat at ', NOW() )
            WHERE id = ?`,
-          [row.id]
+          [ row.id ]
         );
         console.log( `[JOBS] Recovered stale job #${ row.id } (retry ${ row.retry_count + 1 }/${ row.max_retries })` );
       } else {
@@ -547,13 +565,13 @@ export async function recoverStaleJobs( io: SocketIOServer ): Promise<void> {
            error_message = CONCAT( COALESCE(error_message, ''), '\nFailed: heartbeat timeout after max retries' ),
            completed_at = NOW()
            WHERE id = ?`,
-          [row.id]
+          [ row.id ]
         );
         console.log( `[JOBS] Job #${ row.id } failed after max retries (heartbeat timeout)` );
       }
 
-      const [updated] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [row.id] );
-      io.emit( 'job:updated', parseJobRow( updated[0] ) );
+      const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ row.id ] );
+      io.emit( 'job:updated', parseJobRow( updated[ 0 ] ) );
     }
   } catch ( err ) {
     console.error( '[JOBS] Error recovering stale jobs:', err );
@@ -562,17 +580,23 @@ export async function recoverStaleJobs( io: SocketIOServer ): Promise<void> {
 
 // --- Auto-detection helper ---
 
+/**
+ * Create a job only if no pending/queued/processing job of the same type and date exists.
+ *
+ * @param data - job creation request data
+ * @returns the created job, or null if a duplicate exists
+ */
 export async function createJobIfNotExists( data: CreateJobRequest ): Promise<Job | null> {
   const pool = getPool();
 
-  const [existing] = await pool.query<RowDataPacket[]>(
+  const [ existing ] = await pool.query<RowDataPacket[]>(
     `SELECT id FROM jobs WHERE type = ? AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
-    [data.type, data.sunday_date]
+    [ data.type, data.sunday_date ]
   );
 
   if ( existing.length > 0 ) return null;
 
-  const [result] = await pool.query<ResultSetHeader>(
+  const [ result ] = await pool.query<ResultSetHeader>(
     `INSERT INTO jobs (type, status, priority, sunday_date, input_path, output_path, metadata, parent_job_id, max_retries)
      VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -587,12 +611,18 @@ export async function createJobIfNotExists( data: CreateJobRequest ): Promise<Jo
     ]
   );
 
-  const [rows] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [result.insertId] );
-  return parseJobRow( rows[0] );
+  const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
+  return parseJobRow( rows[ 0 ] );
 }
 
 // --- Helpers ---
 
+/**
+ * Parse a raw database row into a typed Job object.
+ *
+ * @param row - raw database row
+ * @returns parsed Job object
+ */
 function parseJobRow( row: RowDataPacket ): Job {
   return {
     ...row,

@@ -2,22 +2,22 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { ThemeToggle } from './theme-toggle';
 
-describe('ThemeToggle', () => {
+describe( 'ThemeToggle', () => {
   let component: ThemeToggle;
   let fixture: ComponentFixture<ThemeToggle>;
 
-  beforeEach(async () => {
+  beforeEach( async () => {
     await TestBed.configureTestingModule({
-      declarations: [ThemeToggle]
+      declarations: [ ThemeToggle ]
     })
     .compileComponents();
 
-    fixture = TestBed.createComponent(ThemeToggle);
+    fixture = TestBed.createComponent( ThemeToggle );
     component = fixture.componentInstance;
     fixture.detectChanges();
-  });
+  } );
 
-  it('should create', () => {
-    expect(component).toBeTruthy();
-  });
-});
+  it( 'should create', () => {
+    expect( component ).toBeTruthy();
+  } );
+} );

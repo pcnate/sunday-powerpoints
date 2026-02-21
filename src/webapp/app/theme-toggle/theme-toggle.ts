@@ -5,6 +5,4 @@ import { Component } from '@angular/core';
   templateUrl: './theme-toggle.html',
   styleUrl: './theme-toggle.scss'
 })
-export class ThemeToggle {
-
-}
+export class ThemeToggle {}

@@ -29,8 +29,8 @@ if ( require.main !== module ) {
 // otherwise run the code
 ( async () => {
 
-  const argv = yargs(hideBin(process.argv))
-    .usage('Usage: $0 [options]')
+  const argv = yargs( hideBin( process.argv ) )
+    .usage( 'Usage: $0 [options]' )
     .options({
       templateFile: { type: 'string', describe: 'Template file name' },
       ext: { type: 'string', describe: 'File extension', default: 'pptx' },
@@ -42,8 +42,8 @@ if ( require.main !== module ) {
       rootPath: { type: 'string', describe: 'Root path for OneDriveConsumer variable' },
       foldersOnly: { type: 'boolean', describe: 'Only create folders, do not create files or shortcuts' },
     })
-    .help('help')
-    .alias('help', 'h')
+    .help( 'help' )
+    .alias( 'help', 'h' )
     .parseSync() as CliArgs;
 
   const SUNDAY_TEMPLATE = argv.templateFile || 'Sunday Template.pptx';
@@ -59,10 +59,10 @@ if ( require.main !== module ) {
   const rootPath: string|undefined = argv.rootPath || undefined;
   const foldersOnly: boolean         = !!argv.foldersOnly;
 
-  if (helpMode) {
+  if ( helpMode ) {
     // yargs.showHelp() does not work as expected in this context, so use yargs(hideBin(process.argv)).getHelp() and print it
-    yargs(hideBin(process.argv)).showHelp();
-    process.exit(0);
+    yargs( hideBin( process.argv ) ).showHelp();
+    process.exit( 0 );
   }
 
   // everything below this point should be in a function that takes an options object

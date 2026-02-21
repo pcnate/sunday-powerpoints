@@ -5,68 +5,68 @@ import * as path from 'node:path';
 import * as ws from 'windows-shortcuts';
 import { randomUUID } from 'crypto';
 
-jest.mock('windows-shortcuts');
-jest.setTimeout(20000);
+jest.mock( 'windows-shortcuts' );
+jest.setTimeout( 20000 );
 
-describe('sundaysInMonth', () => {
-  it('returns correct Sundays for May 2024', () => {
-    expect(lib.sundaysInMonth(5, 2024)).toEqual([5, 12, 19, 26]);
-  });
+describe( 'sundaysInMonth', () => {
+  it( 'returns correct Sundays for May 2024', () => {
+    expect( lib.sundaysInMonth( 5, 2024 ) ).toEqual([ 5, 12, 19, 26 ]);
+  } );
 
-  it('returns correct Sundays for February 2025', () => {
-    expect(lib.sundaysInMonth(2, 2025)).toEqual([2, 9, 16, 23]);
-  });
+  it( 'returns correct Sundays for February 2025', () => {
+    expect( lib.sundaysInMonth( 2, 2025 ) ).toEqual([ 2, 9, 16, 23 ]);
+  } );
 
-  it('returns correct Sundays for a month starting on Sunday', () => {
-    expect(lib.sundaysInMonth(9, 2024)).toEqual([1, 8, 15, 22, 29]);
-  });
-});
+  it( 'returns correct Sundays for a month starting on Sunday', () => {
+    expect( lib.sundaysInMonth( 9, 2024 ) ).toEqual([ 1, 8, 15, 22, 29 ]);
+  } );
+} );
 
-describe('getMonthName', () => {
-  it('returns "January" for 1', () => {
-    expect(lib.getMonthName(1)).toBe('January');
-  });
+describe( 'getMonthName', () => {
+  it( 'returns "January" for 1', () => {
+    expect( lib.getMonthName( 1 ) ).toBe( 'January' );
+  } );
 
-  it('returns "December" for 12', () => {
-    expect(lib.getMonthName(12)).toBe('December');
-  });
-});
+  it( 'returns "December" for 12', () => {
+    expect( lib.getMonthName( 12 ) ).toBe( 'December' );
+  } );
+} );
 
-describe('checkIfFileExists', () => {
+describe( 'checkIfFileExists', () => {
   let statSpy: jest.SpyInstance;
-  beforeEach(() => {
-    statSpy = jest.spyOn(fs.promises, 'stat');
-  });
-  afterEach(() => {
+  beforeEach( () => {
+    statSpy = jest.spyOn( fs.promises, 'stat' );
+  } );
+  afterEach( () => {
     statSpy.mockRestore();
-  });
-  it('returns true if file exists', async () => {
-    statSpy.mockResolvedValueOnce({} as any);
-    await expect(lib.checkIfFileExists('some/path')).resolves.toBe(true);
-  });
-  it('returns false if file does not exist', async () => {
-    statSpy.mockRejectedValueOnce(new Error('not found'));
-    await expect(lib.checkIfFileExists('some/path')).resolves.toBe(false);
-  });
-});
+  } );
+  it( 'returns true if file exists', async () => {
+    statSpy.mockResolvedValueOnce( {} as any );
+    await expect( lib.checkIfFileExists( 'some/path' ) ).resolves.toBe( true );
+  } );
+  it( 'returns false if file does not exist', async () => {
+    statSpy.mockRejectedValueOnce( new Error( 'not found' ) );
+    await expect( lib.checkIfFileExists( 'some/path' ) ).resolves.toBe( false );
+  } );
+} );
 
-describe('resolveToAbsolutePath', () => {
-  it('replaces environment variables with their values', () => {
+describe( 'resolveToAbsolutePath', () => {
+  it( 'replaces environment variables with their values', () => {
     process.env.TESTVAR = 'myvalue';
-    expect(lib.resolveToAbsolutePath('C:/path/%TESTVAR%/file.txt')).toBe('C:/path/myvalue/file.txt');
-  });
+    expect( lib.resolveToAbsolutePath( 'C:/path/%TESTVAR%/file.txt' ) ).toBe( 'C:/path/myvalue/file.txt' );
+  } );
 
-  it('replaces multiple environment variables', () => {
+  it( 'replaces multiple environment variables', () => {
     process.env.FOO = 'foo';
     process.env.BAR = 'bar';
-    expect(lib.resolveToAbsolutePath('C:/%FOO%/%BAR%/baz')).toBe('C:/foo/bar/baz');
-  });
+    expect( lib.resolveToAbsolutePath( 'C:/%FOO%/%BAR%/baz' ) ).toBe( 'C:/foo/bar/baz' );
+  } );
 
-  it('replaces missing environment variables with empty string', () => {
+  it( 'replaces missing environment variables with empty string', () => {
     delete process.env.NOT_SET;
-    expect(lib.resolveToAbsolutePath('C:/path/%NOT_SET%/file.txt')).toBe('C:/path//file.txt');
-  });
-});
+    expect( lib.resolveToAbsolutePath( 'C:/path/%NOT_SET%/file.txt' ) ).toBe( 'C:/path//file.txt' );
+  } );
+} );
 
 // describe('fixExistingShortcuts', () => {
 //   it('fixes .lnk shortcut target paths to variable (integration, default behavior)', async () => {

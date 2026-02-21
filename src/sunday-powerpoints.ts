@@ -3,38 +3,38 @@ import * as path from 'node:path';
 import * as ws from 'windows-shortcuts';
 
 /**
- * get a list of sundays in the month provided
+ * Get a list of sundays in the month provided.
  *
- * @param {number} m human readable month number
- * @param {number} y year
+ * @param m - human readable month number
+ * @param y - year
  * @returns an array of days
  */
 export function sundaysInMonth( m: number, y: number ): number[] {
-  var days = new Date( y, m, 0 ).getDate();
+  const days = new Date( y, m, 0 ).getDate();
   let firstSunday = null;
-  var sundays = [];
+  const sundays: number[] = [];
 
-  let dayOfMonth = 1
-  while( dayOfMonth <= days ) {
-    
-    firstSunday = new Date( m + '/' + dayOfMonth + '/' + y )
+  let dayOfMonth = 1;
+  while ( dayOfMonth <= days ) {
+
+    firstSunday = new Date( m + '/' + dayOfMonth + '/' + y );
 
     if ( firstSunday.getDay() === 0 ) {
-      sundays.push( dayOfMonth )
+      sundays.push( dayOfMonth );
     }
-    
-    dayOfMonth++
+
+    dayOfMonth++;
   }
-  
+
   return sundays;
 }
 
 
 /**
- * get the month name using the month number
- * 
- * @param {number} month human readable month number
- * @returns {string} month name
+ * Get the month name using the month number.
+ *
+ * @param month - human readable month number
+ * @returns month name
  */
 export function getMonthName( month: number ): string {
   const d = new Date();
@@ -45,69 +45,70 @@ export function getMonthName( month: number ): string {
 
 
 /**
- * check if the file exists
+ * Check if the file exists.
  *
- * @param {string} path
- * @returns {boolean} whether or not the file was found
+ * @param path - path to check
+ * @returns whether or not the file was found
  */
 export async function checkIfFileExists( path: string ): Promise<boolean> {
   return await fs.promises.stat( path )
-      .then( () => true  )
-    .catch( () => false )
+    .then( () => true )
+    .catch( () => false );
 }
 
 
 /**
- * replaces windows environment variables with their values in the path
- * 
- * @param {string} path windows path strings
- * @returns string
+ * Replaces windows environment variables with their values in the path.
+ *
+ * @param path - windows path strings
+ * @returns resolved absolute path
  */
 export function resolveToAbsolutePath( path: string ): string {
-  return path.replace(/%([^%]+)%/g, function (_, key) {
-    return process.env[key] ?? '';
-  });
+  return path.replace( /%([^%]+)%/g, function ( _, key ) {
+    return process.env[ key ] ?? '';
+  } );
 }
 
 
 /**
- * fix existing shortcuts in a directory
+ * Fix existing shortcuts in a directory.
  * This function will search for all shortcuts in the specified directory
  * and replace the OneDriveConsumer path with the provided rootPath.
  * If rootPath is not provided, it will replace the path with the variable '^%OneDriveConsumer^%'.
  * This is useful for fixing shortcuts that were created with an old path
  * and need to be updated to use the new OneDriveConsumer variable.
- * 
- * @param directory directory to search for shortcuts
- * @param rootPath optional root path to replace OneDriveConsumer with
+ *
+ * @param directory - directory to search for shortcuts
+ * @param rootPath - optional root path to replace OneDriveConsumer with
  * @returns resolves when all shortcuts have been fixed
  */
 export async function fixExistingShortcuts( directory: string, rootPath?: string ): Promise<void> {
-  let options = {};
+  const options = {};
   let files: string[] = await fs.promises.readdir( directory, options );
-  files = files.filter( file => file.endsWith('.lnk' ) );
-  for ( let file of files ) {
+  files = files.filter( file => file.endsWith( '.lnk' ) );
+  for ( const file of files ) {
     await fixShortCutPath( path.join( directory, file ), rootPath );
   }
 }
 
 
 /**
- * create a shortcut
+ * Create a shortcut.
  * This function creates a Windows shortcut (.lnk file) at the specified filename.
  * It takes a description and a target file path as parameters.
  * The target path is processed to replace the OneDriveConsumer path with a variable or a provided root path.
- * 
- * @param {path} filename path and filename
- * @param {string} description description of the short cut
- * @param {path} target path and target file
- * @returns 
+ *
+ * @param filename - path and filename
+ * @param description - description of the shortcut
+ * @param target - path and target file
+ * @param rootPath - optional root path to replace OneDriveConsumer with
+ * @returns whether the shortcut was created successfully
  */
 export async function createShortcut( filename: string, description: string, target: string, rootPath?: string ): Promise<boolean> {
   return new Promise( async resolve => {
     target = await replaceOneDriveConsumerPath( target, rootPath );
     target = target.replace( /\\/gmi, '/' );
-    target = target.replace( /\%OneDriveConsumer\%/gmi, '^%OneDriveConsumer^%' )
+    target = target.replace( /\%OneDriveConsumer\%/gmi, '^%OneDriveConsumer^%' );
     ws.create(
       filename,
       {
@@ -115,24 +116,24 @@ export async function createShortcut( filename: string, description: string, tar
         runStyle: 1, // 1 = NORMAL
         desc: description,
       },
-      (err: any) => {
-        if (err) {
-          console.error('Error creating shortcut', filename, err);
-          resolve(false);
+      ( err: any ) => {
+        if ( err ) {
+          console.error( 'Error creating shortcut', filename, err );
+          resolve( false );
           return;
         }
-        resolve(true);
+        resolve( true );
       }
     );
-  });
+  } );
 }
 
 
 /**
- * get the options for a shortcut
- * 
- * @param {path} filePath path of the shortcut
- * @returns {object}
+ * Get the options for a shortcut.
+ *
+ * @param filePath - path of the shortcut
+ * @returns shortcut options or false on error
  */
 export async function queryOptions( filePath: string ): Promise<object | false> {
   return new Promise( resolve => {
@@ -143,16 +144,16 @@ export async function queryOptions( filePath: string ): Promise<object | false> 
         return;
       }
       resolve( Object.assign( {}, _options ) );
-    });
-  });
+    } );
+  } );
 }
 
 
 /**
- * update the options for a shortcut
- * 
- * @param filePath path of the shartcut to modify
- * @param options windows-shortcut options
+ * Update the options for a shortcut.
+ *
+ * @param filePath - path of the shortcut to modify
+ * @param options - windows-shortcut options
  * @returns true if the options were updated, false if there was an error
  */
 export async function updateOptions( filePath: string, options: any ): Promise<boolean> {
@@ -164,16 +165,17 @@ export async function updateOptions( filePath: string, options: any ): Promise<b
         return;
       }
       resolve( true );
-    });
-  });
+    } );
+  } );
 }
 
 
 /**
- * replace the absolute path of a shortcut with windows variables
- * 
- * @param {string} filePath path to the shortcut
- * @returns {void}
+ * Replace the absolute path of a shortcut with windows variables.
+ *
+ * @param filePath - path to the shortcut
+ * @param rootPath - optional root path to replace OneDriveConsumer with
+ * @returns whether the shortcut was fixed successfully
  */
 export async function fixShortCutPath( filePath: string, rootPath?: string ): Promise<boolean> {
   let options: any = {};
@@ -194,10 +196,11 @@ export async function fixShortCutPath( filePath: string, rootPath?: string ): Pr
 
 
 /**
- * replaces the OneDriveConsumer folder with the variable in a path
- * 
- * @param {path} path path to replace
- * @returns {path}
+ * Replaces the OneDriveConsumer folder with the variable in a path.
+ *
+ * @param path - path to replace
+ * @param rootPath - optional root path to replace OneDriveConsumer with
+ * @returns the path with OneDriveConsumer replaced
  */
 export async function replaceOneDriveConsumerPath( path: string, rootPath?: string ): Promise<string> {
   if ( rootPath ) {
@@ -211,10 +214,11 @@ export async function replaceOneDriveConsumerPath( path: string, rootPath?: stri
 
 
 /**
- * ensure a directory exists and create it if it does not
- * do not throw an error if the directory already exists
- * 
- * @param dir directory to ensure exists
+ * Ensure a directory exists and create it if it does not.
+ * Do not throw an error if the directory already exists.
+ *
+ * @param dir - directory to ensure exists
+ * @returns true if the directory was created or already exists
  */
 export async function ensureDir( dir: string ): Promise<boolean> {
   try {
@@ -227,36 +231,36 @@ export async function ensureDir( dir: string ): Promise<boolean> {
 
 
 /**
- * write a file to the filesystem with the optional content
- * 
- * @param filePath path to the file
- * @param content content to write to the file
+ * Write a file to the filesystem with the optional content.
+ *
+ * @param filePath - path to the file
+ * @param content - content to write to the file
  * @returns resolves when the file has been written
  */
 export async function writeFile( filePath: string, content?: string ): Promise<boolean> {
   try {
     await fs.promises.writeFile( filePath, content || '', 'utf8' );
     return true;
-  } catch (error) {
-    console.error(`Error writing file ${filePath}:`, error);
+  } catch ( error ) {
+    console.error( `Error writing file ${ filePath }:`, error );
     return false;
   }
 }
   
 
 /**
- * copy a file from one location to another
- * 
- * @param source source file path
- * @param destination destination file path
+ * Copy a file from one location to another.
+ *
+ * @param source - source file path
+ * @param destination - destination file path
  * @returns resolves when the file has been copied
  */
 export async function copyFile( source: string, destination: string ): Promise<boolean> {
   try {
     await fs.promises.copyFile( source, destination );
     return true;
-  } catch (error) {
-    console.error(`Error copying file from ${ source } to ${ destination }:`, error);
+  } catch ( error ) {
+    console.error( `Error copying file from ${ source } to ${ destination }:`, error );
     return false;
   }
 }
@@ -274,87 +278,93 @@ export interface SundayPowerpointsOptions {
   foldersOnly?: boolean;
 }
 
-export async function runSundayPowerpoints(options: SundayPowerpointsOptions) {
+/**
+ * Run the Sunday PowerPoints workflow for a given month.
+ * Creates folders, copies templates, and creates shortcuts for each Sunday.
+ *
+ * @param options - configuration options for the workflow
+ */
+export async function runSundayPowerpoints( options: SundayPowerpointsOptions ) {
   const { month, year, templateDirectory, outputDirectory, SUNDAY_TEMPLATE, ext, writeMode, rootPath, foldersOnly } = options;
-  console.log(`${getMonthName(month)} ${year}`);
-  console.log(`Using Directory: ${templateDirectory}`);
-  console.log(`Write mode is ${writeMode ? 'enabled' : 'disabled, use --write to write files'}\r\n`);
+  console.log( `${ getMonthName( month ) } ${ year }` );
+  console.log( `Using Directory: ${ templateDirectory }` );
+  console.log( `Write mode is ${ writeMode ? 'enabled' : 'disabled, use --write to write files' }\r\n` );
 
-  const templateFile = path.join(templateDirectory, SUNDAY_TEMPLATE);
+  const templateFile = path.join( templateDirectory, SUNDAY_TEMPLATE );
 
   // checks for the existence of the template file
-  if (!foldersOnly) {
-    const exists = await checkIfFileExists(resolveToAbsolutePath(templateFile));
-    if (!exists) {
-      const errorMsg = `'${SUNDAY_TEMPLATE}' not found in '${templateDirectory}'`;
-      console.error(errorMsg);
+  if ( !foldersOnly ) {
+    const exists = await checkIfFileExists( resolveToAbsolutePath( templateFile ) );
+    if ( !exists ) {
+      const errorMsg = `'${ SUNDAY_TEMPLATE }' not found in '${ templateDirectory }'`;
+      console.error( errorMsg );
       process.send?.({ type: 'error', error: errorMsg });
-      process.exit(1);
+      process.exit( 1 );
     }
-    const foundMsg = `Found template: '${templateDirectory}\\${SUNDAY_TEMPLATE}'`;
-    console.log(foundMsg);
+    const foundMsg = `Found template: '${ templateDirectory }\\${ SUNDAY_TEMPLATE }'`;
+    console.log( foundMsg );
     process.send?.({ type: 'info', message: foundMsg });
   }
 
   // lets get the date a week out so we can work on next weeks powerpoints
-  let sundayFiles: string[] = sundaysInMonth(month, year).map(sunday => {
+  const sundayFiles: string[] = sundaysInMonth( month, year ).map( sunday => {
     return [
       year,
-      month.toString().padStart(2, '0'),
-      sunday.toString().padStart(2, '0'),
-    ].join('-');
-  });
+      month.toString().padStart( 2, '0' ),
+      sunday.toString().padStart( 2, '0' ),
+    ].join( '-' );
+  } );
 
   // go through each file and check if it should be created
-  for (const file of sundayFiles) {
-    let _outputDirectory = path.join(outputDirectory, file.replace(/-/gmi, ''));
-    let vidsDirectory = path.join(_outputDirectory, 'Vids');
-    let archiveDirectory = path.join(_outputDirectory, 'archive');
-    let templateFilePath = path.join(templateDirectory, SUNDAY_TEMPLATE);
-    let shortcutPathTodo = `${path.join(templateDirectory, file)} TODO.lnk`;
-    let shortcutPathDone = `${path.join(templateDirectory, file)}.lnk`;
-    let filePath = `${path.join(_outputDirectory, file)}.${ext}`;
-    let notesPath = path.join(_outputDirectory, `${file} Notes.txt`);
-    let existsTodo = await checkIfFileExists(resolveToAbsolutePath(shortcutPathTodo));
-    let existsDone = await checkIfFileExists(resolveToAbsolutePath(shortcutPathDone));
+  for ( const file of sundayFiles ) {
+    const _outputDirectory = path.join( outputDirectory, file.replace( /-/gmi, '' ) );
+    const vidsDirectory = path.join( _outputDirectory, 'Vids' );
+    const archiveDirectory = path.join( _outputDirectory, 'archive' );
+    const templateFilePath = path.join( templateDirectory, SUNDAY_TEMPLATE );
+    const shortcutPathTodo = `${ path.join( templateDirectory, file ) } TODO.lnk`;
+    const shortcutPathDone = `${ path.join( templateDirectory, file ) }.lnk`;
+    const filePath = `${ path.join( _outputDirectory, file ) }.${ ext }`;
+    const notesPath = path.join( _outputDirectory, `${ file } Notes.txt` );
+    const existsTodo = await checkIfFileExists( resolveToAbsolutePath( shortcutPathTodo ) );
+    const existsDone = await checkIfFileExists( resolveToAbsolutePath( shortcutPathDone ) );
 
     // create the shortcut
-    if (!existsTodo && !existsDone) {
-      if (writeMode) {
-        if (foldersOnly) {
+    if ( !existsTodo && !existsDone ) {
+      if ( writeMode ) {
+        if ( foldersOnly ) {
           // Only create folders, skip notes, copy, shortcut
-          await ensureDir(resolveToAbsolutePath(_outputDirectory));
-          await ensureDir(resolveToAbsolutePath(vidsDirectory));
-          await ensureDir(resolveToAbsolutePath(archiveDirectory));
-          const msg = `Created folders for '${file}'`;
-          console.log(msg);
+          await ensureDir( resolveToAbsolutePath( _outputDirectory ) );
+          await ensureDir( resolveToAbsolutePath( vidsDirectory ) );
+          await ensureDir( resolveToAbsolutePath( archiveDirectory ) );
+          const msg = `Created folders for '${ file }'`;
+          console.log( msg );
           process.send?.({ type: 'info', message: msg });
         } else {
-          const copyingMsg = `Coping '${SUNDAY_TEMPLATE}' to '${file}'`;
-          console.log(copyingMsg);
+          const copyingMsg = `Copying '${ SUNDAY_TEMPLATE }' to '${ file }'`;
+          console.log( copyingMsg );
           process.send?.({ type: 'info', message: copyingMsg });
-          await ensureDir(resolveToAbsolutePath(_outputDirectory));
-          await ensureDir(resolveToAbsolutePath(vidsDirectory));
-          await ensureDir(resolveToAbsolutePath(archiveDirectory));
-          await writeFile(resolveToAbsolutePath(notesPath), '\r\nTitle: \r\n\r\n');
-          await copyFile(resolveToAbsolutePath(templateFilePath), resolveToAbsolutePath(filePath));
-          await fixExistingShortcuts(resolveToAbsolutePath(_outputDirectory), rootPath);
-          await createShortcut(path.join(templateDirectory, `${file} TODO.lnk`), `Sunday ${file}`, filePath, rootPath);
+          await ensureDir( resolveToAbsolutePath( _outputDirectory ) );
+          await ensureDir( resolveToAbsolutePath( vidsDirectory ) );
+          await ensureDir( resolveToAbsolutePath( archiveDirectory ) );
+          await writeFile( resolveToAbsolutePath( notesPath ), '\r\nTitle: \r\n\r\n' );
+          await copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
+          await fixExistingShortcuts( resolveToAbsolutePath( _outputDirectory ), rootPath );
+          await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath, rootPath );
         }
       } else {
-        if (!foldersOnly) {
-          const willCopyMsg = `Will copy '${SUNDAY_TEMPLATE}' to '${filePath}'`;
-          console.log(willCopyMsg);
+        if ( !foldersOnly ) {
+          const willCopyMsg = `Will copy '${ SUNDAY_TEMPLATE }' to '${ filePath }'`;
+          console.log( willCopyMsg );
           process.send?.({ type: 'info', message: willCopyMsg });
         } else {
-          const willCreateFoldersMsg = `Will create folders for '${file}'`;
-          console.log(willCreateFoldersMsg);
+          const willCreateFoldersMsg = `Will create folders for '${ file }'`;
+          console.log( willCreateFoldersMsg );
           process.send?.({ type: 'info', message: willCreateFoldersMsg });
         }
       }
     } else {
-      const alreadyExistsMsg = `'${file}${existsTodo ? ' TODO' : ''}' already exists${writeMode ? ', not overwriting' : ''}`;
-      console.log(alreadyExistsMsg);
+      const alreadyExistsMsg = `'${ file }${ existsTodo ? ' TODO' : '' }' already exists${ writeMode ? ', not overwriting' : '' }`;
+      console.log( alreadyExistsMsg );
       process.send?.({ type: 'info', message: alreadyExistsMsg });
     }
   }

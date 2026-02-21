@@ -21,8 +21,8 @@ jest.mock( 'mysql2/promise', () => ({
     query: mockPoolQuery,
     getConnection: mockGetConnection,
     end: mockPoolEnd,
-  })),
-}));
+  }) ),
+}) );
 
 // Mock fs for migration runner
 jest.mock( 'node:fs', () => {
@@ -32,7 +32,7 @@ jest.mock( 'node:fs', () => {
     existsSync: jest.fn( () => false ), // No migrations dir during tests
     readdirSync: jest.fn( () => [] ),
   };
-});
+} );
 
 import * as db from '../src/db';
 import { Job, CreateJobRequest, JobType, JobStatus } from '../src/types/job';
@@ -89,7 +89,7 @@ describe( 'db module', () => {
   describe( 'healthCheck', () => {
     it( 'returns true when DB is available', async () => {
       await db.initDb();
-      mockPoolQuery.mockResolvedValueOnce( [[{ '1': 1 }], []] );
+      mockPoolQuery.mockResolvedValueOnce( [[ { '1': 1 } ], []] );
       const result = await db.healthCheck();
       expect( result ).toBe( true );
     });
@@ -115,7 +115,7 @@ describe( 'Job types', () => {
       input_path: '/output/20260222/Vids',
       output_path: '/output/20260222/Vids/20260222.kdenlive',
       priority: 3,
-      metadata: { camera_files: ['file1.mp4', 'file2.mp4'] },
+      metadata: { camera_files: [ 'file1.mp4', 'file2.mp4' ] },
       parent_job_id: 1,
       max_retries: 5,
     };
@@ -125,12 +125,12 @@ describe( 'Job types', () => {
   });
 
   it( 'JobType only allows valid types', () => {
-    const validTypes: JobType[] = ['video-alignment', 'transcription', 'claude-processing'];
+    const validTypes: JobType[] = [ 'video-alignment', 'transcription', 'claude-processing' ];
     expect( validTypes.length ).toBe( 3 );
   });
 
   it( 'JobStatus covers all states', () => {
-    const validStatuses: JobStatus[] = ['pending', 'queued', 'processing', 'completed', 'failed', 'cancelled'];
+    const validStatuses: JobStatus[] = [ 'pending', 'queued', 'processing', 'completed', 'failed', 'cancelled' ];
     expect( validStatuses.length ).toBe( 6 );
   });
 });
@@ -235,7 +235,7 @@ describe( 'Job API route logic', () => {
 
 describe( 'scanFolders job detection logic', () => {
   it( 'detects 2+ raw MP4s without production file as alignment candidate', () => {
-    const files = ['00001.MP4', '00002.MP4', 'thumbnail.jpeg'];
+    const files = [ '00001.MP4', '00002.MP4', 'thumbnail.jpeg' ];
     const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
     const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
     const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
@@ -246,7 +246,7 @@ describe( 'scanFolders job detection logic', () => {
   });
 
   it( 'detects production MP4 as transcription candidate', () => {
-    const files = ['00001.MP4', '00002.MP4', '20260222-production.mp4', 'thumbnail.jpeg'];
+    const files = [ '00001.MP4', '00002.MP4', '20260222-production.mp4', 'thumbnail.jpeg' ];
     const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
     const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
 
@@ -255,7 +255,7 @@ describe( 'scanFolders job detection logic', () => {
   });
 
   it( 'does not create alignment job when production file exists', () => {
-    const files = ['00001.MP4', '00002.MP4', '20260222-production.mp4'];
+    const files = [ '00001.MP4', '00002.MP4', '20260222-production.mp4' ];
     const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
     const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
     const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
@@ -266,7 +266,7 @@ describe( 'scanFolders job detection logic', () => {
   });
 
   it( 'does not trigger with only 1 MP4', () => {
-    const files = ['00001.MP4', 'thumbnail.jpeg'];
+    const files = [ '00001.MP4', 'thumbnail.jpeg' ];
     const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
     const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
 
@@ -277,9 +277,9 @@ describe( 'scanFolders job detection logic', () => {
 
 describe( 'migration system', () => {
   it( 'migration files are sorted alphabetically for ordered execution', () => {
-    const files = ['003_add_index.sql', '001_create_tables.sql', '002_add_column.sql'];
-    const sorted = [...files].sort();
-    expect( sorted ).toEqual( ['001_create_tables.sql', '002_add_column.sql', '003_add_index.sql'] );
+    const files = [ '003_add_index.sql', '001_create_tables.sql', '002_add_column.sql' ];
+    const sorted = [ ...files ].sort();
+    expect( sorted ).toEqual([ '001_create_tables.sql', '002_add_column.sql', '003_add_index.sql' ]);
   });
 
   it( 'migration names are extracted by removing .sql extension', () => {
