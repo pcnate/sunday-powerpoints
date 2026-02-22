@@ -1,0 +1,59 @@
+<!-- Filter row (sticky below tabs) -->
+<div class="filter-row">
+  <mat-form-field appearance="outline" class="search-field">
+    <mat-label>Search songs</mat-label>
+    <input matInput [(ngModel)]="searchText" (ngModelChange)="filterSongs()"
+           placeholder="Search by name, number, or book...">
+    <mat-icon matSuffix>search</mat-icon>
+  </mat-form-field>
+
+  <mat-form-field appearance="outline" class="book-field">
+    <mat-label>Book/Source</mat-label>
+    <mat-select [(ngModel)]="selectedBook" (selectionChange)="filterSongs()">
+      <mat-option value="">All Books/Sources ({{ songs.length }})</mat-option>
+      <mat-option *ngFor="let b of books" [value]="b.name">
+        {{ b.name }} ({{ b.count }})
+      </mat-option>
+    </mat-select>
+  </mat-form-field>
+
+  <span class="song-count">{{ filteredSongs.length }} songs</span>
+</div>
+
+<!-- Scrollable table area -->
+<div class="table-scroll">
+  <!-- Loading spinner -->
+  <div *ngIf="loading" class="loading">
+    <mat-spinner diameter="40"></mat-spinner>
+  </div>
+
+  <!-- Songs table -->
+  <table mat-table [dataSource]="filteredSongs" matSort (matSortChange)="sortData( $event )"
+         class="songs-table" *ngIf="!loading && filteredSongs.length > 0">
+
+    <ng-container matColumnDef="number">
+      <th mat-header-cell *matHeaderCellDef mat-sort-header>#</th>
+      <td mat-cell *matCellDef="let song">{{ song.number || '-' }}</td>
+    </ng-container>
+
+    <ng-container matColumnDef="name">
+      <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
+      <td mat-cell *matCellDef="let song">{{ song.name }}</td>
+    </ng-container>
+
+    <ng-container matColumnDef="book">
+      <th mat-header-cell *matHeaderCellDef mat-sort-header>Book</th>
+      <td mat-cell *matCellDef="let song">{{ song.book || '-' }}</td>
+    </ng-container>
+
+    <tr mat-header-row *matHeaderRowDef="displayedColumns; sticky: true"></tr>
+    <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+  </table>
+
+  <!-- Empty state -->
+  <div class="empty-state" *ngIf="!loading && filteredSongs.length === 0">
+    <mat-icon>library_music</mat-icon>
+    <p *ngIf="searchText">No songs match "{{ searchText }}"</p>
+    <p *ngIf="!searchText">No songs found in library</p>
+  </div>
+</div>

@@ -5,10 +5,12 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import ws from 'windows-shortcuts';
 const schedule = require( 'node-schedule' );
-import { createShortcut } from './sunday-powerpoints';
+import { createShortcut, sundaysInMonth } from './sunday-powerpoints';
+import { getClosingSong, setClosingSong, syncSelectionsFromFolder, FolderSongInfo } from './songs-db';
 import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
-import { initDb, closeDb } from './db';
+import { initDb, closeDb, getPool } from './db';
+import { RowDataPacket } from 'mysql2/promise';
 import { createJobRoutes, recoverStaleJobs, createJobIfNotExists } from './routes/jobs';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
@@ -711,6 +713,82 @@ app.use( '/api/jobs', createJobRoutes( io ) );
 /**
  * API endpoint to list folders in outputDirectory
  */
+/**
+ * Scan a single YYYYMMDD folder and return its metadata.
+ *
+ * @param folderPath - absolute path to the folder
+ * @param folderName - the YYYYMMDD folder name
+ * @param backlog - whether this folder is in a backlog directory
+ * @returns folder metadata object
+ */
+async function scanFolderMetadata( folderPath: string, folderName: string, backlog: boolean ) {
+  let hasPre = false;
+  let isApproved = false;
+  let files: string[] = [];
+  try {
+    files = await fs.promises.readdir( folderPath );
+    const preFile = files.find( f => f.toLowerCase().endsWith( '.' + config.ext.toLowerCase() ) );
+    hasPre = !!preFile;
+    // Approved = presentation exists and filename does NOT contain "TODO"
+    isApproved = hasPre && !!preFile && !preFile.toUpperCase().includes( 'TODO' );
+  } catch {}
+
+  const vidsPath = path.join( folderPath, 'Vids' );
+  let hasMp4 = false;
+  let thumbnail = null;
+  let videoFileName = null;
+  let hasProduction = false;
+  let hasTranscription = false;
+  try {
+    const vidsFiles = await fs.promises.readdir( vidsPath );
+    hasMp4 = vidsFiles.some( f => f.toLowerCase().endsWith( '.mp4' ) );
+    if ( hasMp4 ) {
+      videoFileName = vidsFiles.find( f => f.toLowerCase().endsWith( '.mp4' ) );
+    }
+    const thumbFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.jpeg' ) || f.toLowerCase().endsWith( '.thm' ) );
+    if ( thumbFile ) {
+      thumbnail = `/api/thumbnail/${ encodeURIComponent( folderName ) }`;
+    }
+    // Pipeline: check for production MP4 and transcription VTT in Vids/
+    hasProduction = vidsFiles.some( f => /^\d{8}-production\.mp4$/i.test( f ) );
+    hasTranscription = vidsFiles.some( f => f.toLowerCase().endsWith( '.vtt' ) );
+  } catch {}
+
+  let hasSong1 = false, hasSong2 = false, hasSong3 = false;
+  let hasKdenlive = false;
+  let hasSermonMd = false;
+  files.forEach( f => {
+    const lower = f.toLowerCase();
+    if ( lower.startsWith( 'song 1 ' ) ) hasSong1 = true;
+    if ( lower.startsWith( 'song 2 ' ) ) hasSong2 = true;
+    if ( lower.startsWith( 'song 3 ' ) ) hasSong3 = true;
+    if ( lower.endsWith( '.kdenlive' ) ) hasKdenlive = true;
+    if ( /^\d{8}-sermon\.md$/i.test( f ) ) hasSermonMd = true;
+  });
+
+  const hasNotes = hasNotesFile( folderName, files );
+  return {
+    name: folderName,
+    hasPre,
+    isApproved,
+    hasMp4,
+    thumbnail,
+    videoFileName,
+    hasSong1,
+    hasSong2,
+    hasSong3,
+    hasNotes,
+    hasKdenlive,
+    hasProduction,
+    hasTranscription,
+    hasSermonMd,
+    youtubeUrl: null as string | null,
+    backlog,
+    files,
+  };
+}
+
+
 app.get( '/api/folders', async ( request: Request, response: Response ) => {
   const [ error, entries ]: [ unknown, fs.Dirent[] | null ] = await fs.promises.readdir( config.outputDirectory, { withFileTypes: true } )
     .then( ( entries: fs.Dirent[] ) => [ null, entries ] as [ null, fs.Dirent[] ] )
@@ -719,62 +797,59 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
     response.status( 500 ).json( [] );
     return;
   }
-  const folders = entries
-    .filter( ( entry: fs.Dirent ) => entry.isDirectory() )
-    .map( ( entry: fs.Dirent ) => entry.name )
-    .sort( ( a: string, b: string ) => b.localeCompare( a ) ); // Newest first
 
-  // For each folder, check for pptx, mp4, thumbnail, and notes file
-  const folderData = await Promise.all( folders.map( async ( folder ) => {
-    const folderPath = path.join( config.outputDirectory, folder );
-    // Check for file with configured ext in main folder
-    let hasPre = false;
-    let files: string[] = [];
-    try {
-      files = await fs.promises.readdir( folderPath );
-      hasPre = files.some( f => f.toLowerCase().endsWith( '.' + config.ext.toLowerCase() ) );
-    } catch {}
-    // Check for mp4 and thumbnail in Vids subdir
-    const vidsPath = path.join( folderPath, 'Vids' );
-    let hasMp4 = false;
-    let thumbnail = null;
-    let videoFileName = null;
-    try {
-      const vidsFiles = await fs.promises.readdir( vidsPath );
-      hasMp4 = vidsFiles.some( f => f.toLowerCase().endsWith( '.mp4' ) );
-      if ( hasMp4 ) {
-        videoFileName = vidsFiles.find( f => f.toLowerCase().endsWith( '.mp4' ) );
-      }
-      const thumbFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.jpeg' ) || f.toLowerCase().endsWith( '.thm' ) );
-      if ( thumbFile ) {
-        thumbnail = `/api/thumbnail/${ encodeURIComponent( folder ) }`;
-      }
-    } catch {}
+  // Collect top-level YYYYMMDD folders and backlog subfolders
+  const dateFolders: { name: string; fullPath: string; backlog: boolean }[] = [];
+  const dateRegex = /^\d{8}$/;
 
-    // check for song shortcuts in the folder that start with "song 1", "song 2", "song 3"
-    let hasSong1 = false, hasSong2 = false, hasSong3 = false;
-    files.forEach( f => {
-      const lower = f.toLowerCase();
-      if ( lower.startsWith( 'song 1 ' ) ) hasSong1 = true;
-      if ( lower.startsWith( 'song 2 ' ) ) hasSong2 = true;
-      if ( lower.startsWith( 'song 3 ' ) ) hasSong3 = true;
-    });
+  for ( const entry of entries ) {
+    if ( !entry.isDirectory() ) continue;
 
-    // Check for notes file
-    const hasNotes = hasNotesFile( folder, files );
-    return {
-      name: folder,
-      hasPre,
-      hasMp4,
-      thumbnail,
-      videoFileName,
-      hasSong1,
-      hasSong2,
-      hasSong3,
-      hasNotes,
-      files, // for debugging or future use, can be removed if not needed
-    };
-  }) );
+    if ( dateRegex.test( entry.name ) ) {
+      dateFolders.push({
+        name: entry.name,
+        fullPath: path.join( config.outputDirectory, entry.name ),
+        backlog: false,
+      });
+    } else if ( /^\d{4}\s+backlog$/i.test( entry.name ) ) {
+      const backlogPath = path.join( config.outputDirectory, entry.name );
+      try {
+        const subEntries = await fs.promises.readdir( backlogPath, { withFileTypes: true } );
+        for ( const sub of subEntries ) {
+          if ( sub.isDirectory() && dateRegex.test( sub.name ) ) {
+            dateFolders.push({
+              name: sub.name,
+              fullPath: path.join( backlogPath, sub.name ),
+              backlog: true,
+            });
+          }
+        }
+      } catch {}
+    }
+  }
+
+  dateFolders.sort( ( a, b ) => b.name.localeCompare( a.name ) );
+
+  const folderData = await Promise.all(
+    dateFolders.map( f => scanFolderMetadata( f.fullPath, f.name, f.backlog ) )
+  );
+
+  // Merge YouTube URLs from MySQL (if DB available)
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT sunday_date, url FROM youtube_urls' );
+    const urlMap = new Map<string, string>();
+    for ( const row of rows ) {
+      urlMap.set( row.sunday_date, row.url );
+    }
+    for ( const folder of folderData ) {
+      const url = urlMap.get( folder.name );
+      if ( url ) folder.youtubeUrl = url;
+    }
+  } catch {
+    // DB not available — youtubeUrl stays null
+  }
+
   response.json( folderData );
 });
 
@@ -871,7 +946,7 @@ app.get( '/api/template-info', async ( req: Request, res: Response ) => {
  * @param options.foldersOnly - whether to create folders only (no template copy)
  * @returns result object with success status and message or error
  */
-function runFolderCreation({ month, year, write, foldersOnly }: { month: number, year: number, write: boolean, foldersOnly: boolean }): Promise<{ success: boolean, message?: string, error?: string }> {
+function runFolderCreation({ month, year, write, foldersOnly, overwrite }: { month: number, year: number, write: boolean, foldersOnly: boolean, overwrite?: boolean }): Promise<{ success: boolean, message?: string, error?: string }> {
   return new Promise( ( resolve ) => {
     let command: string;
     let args: string[];
@@ -903,6 +978,7 @@ function runFolderCreation({ month, year, write, foldersOnly }: { month: number,
       ];
       if ( write ) args.push( '--write' );
       if ( foldersOnly !== false ) args.push( '--folders-only' );
+      if ( overwrite ) args.push( '--overwrite' );
       cwd = path.resolve( __dirname, '..' ); // project root
       useShell = true; // npx on Windows sometimes needs shell
     } else {
@@ -919,6 +995,7 @@ function runFolderCreation({ month, year, write, foldersOnly }: { month: number,
       ];
       if ( write ) args.push( '--write' );
       if ( foldersOnly !== false ) args.push( '--folders-only' );
+      if ( overwrite ) args.push( '--overwrite' );
       cwd = path.resolve( __dirname, '..' ); // project root
       useShell = false;
     }
@@ -965,12 +1042,12 @@ app.post( '/api/run-folders', async ( req: Request, res: Response ) => {
  * API endpoint to run the template copy script (full template copy)
  */
 app.post( '/api/copy-template', async ( req: Request, res: Response ) => {
-  const { month, year, write } = req.body || {};
+  const { month, year, write, overwrite } = req.body || {};
   if ( !month || !year ) {
     res.status( 400 ).json({ error: 'Month and year are required.' });
     return;
   }
-  const result = await runFolderCreation({ month: Number( month ), year: Number( year ), write: !!write, foldersOnly: false });
+  const result = await runFolderCreation({ month: Number( month ), year: Number( year ), write: !!write, foldersOnly: false, overwrite: !!overwrite });
   res.json( result );
 });
 
@@ -1023,6 +1100,265 @@ app.post( '/api/notes', function( req: any, res: any ) {
       });
     })
     .catch( () => res.status( 404 ).send( 'Folder not found' ) );
+});
+
+
+/**
+ * API endpoint to get the YouTube URL for a Sunday folder.
+ */
+app.get( '/api/youtube-url', async ( req: Request, res: Response ) => {
+  const folder = req.query.folder as string;
+  if ( !folder || !/^\d{8}$/.test( folder ) ) {
+    res.status( 400 ).json({ error: 'Missing or invalid folder (YYYYMMDD required)' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT url FROM youtube_urls WHERE sunday_date = ?',
+      [ folder ]
+    );
+    res.json({ url: rows.length > 0 ? rows[ 0 ].url : null });
+  } catch {
+    res.json({ url: null });
+  }
+});
+
+
+/**
+ * API endpoint to save/update the YouTube URL for a Sunday folder.
+ */
+app.put( '/api/youtube-url', async ( req: Request, res: Response ) => {
+  const { folder, url } = req.body || {};
+  if ( !folder || !/^\d{8}$/.test( folder ) ) {
+    res.status( 400 ).json({ error: 'Missing or invalid folder (YYYYMMDD required)' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    if ( !url || url.trim() === '' ) {
+      await pool.query( 'DELETE FROM youtube_urls WHERE sunday_date = ?', [ folder ] );
+    } else {
+      await pool.query(
+        'INSERT INTO youtube_urls (sunday_date, url) VALUES (?, ?) ON DUPLICATE KEY UPDATE url = VALUES(url)',
+        [ folder, url.trim() ]
+      );
+    }
+    io.emit( 'folder-changes', { name: folder } );
+    res.json({ ok: true });
+  } catch ( err ) {
+    res.status( 500 ).json({ error: 'Failed to save YouTube URL' });
+  }
+});
+
+
+/**
+ * API endpoint to approve a presentation by renaming the PPTX file to remove "TODO".
+ */
+app.put( '/api/folders/:name/approve', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const folderPath = path.join( config.outputDirectory, folderName );
+  let files: string[] = [];
+  try {
+    files = await fs.promises.readdir( folderPath );
+  } catch {
+    res.status( 404 ).json({ error: 'Folder not found' });
+    return;
+  }
+
+  // Find the presentation file with "TODO" in its name
+  const ext = '.' + config.ext.toLowerCase();
+  const todoFile = files.find( f =>
+    f.toLowerCase().endsWith( ext ) && f.toUpperCase().includes( 'TODO' )
+  );
+
+  if ( !todoFile ) {
+    // Check if already approved
+    const hasPresentation = files.some( f => f.toLowerCase().endsWith( ext ) );
+    if ( hasPresentation ) {
+      res.json({ ok: true, message: 'Already approved' });
+    } else {
+      res.status( 404 ).json({ error: 'No presentation file found' });
+    }
+    return;
+  }
+
+  // Rename to remove "TODO" (and clean up extra spaces/dashes)
+  const newName = todoFile
+    .replace( /TODO\s*-?\s*/gi, '' )
+    .replace( /\s*-?\s*TODO/gi, '' )
+    .replace( /\s{2,}/g, ' ' )
+    .trim();
+
+  const oldPath = path.join( folderPath, todoFile );
+  const newPath = path.join( folderPath, newName );
+
+  try {
+    await fs.promises.rename( oldPath, newPath );
+    console.log( `[APPROVE] Renamed "${ todoFile }" → "${ newName }" in ${ folderName }` );
+    io.emit( 'folder-changes', { name: folderName } );
+    res.json({ ok: true, oldName: todoFile, newName });
+  } catch ( err ) {
+    console.error( `[APPROVE] Failed to rename in ${ folderName }:`, err );
+    res.status( 500 ).json({ error: 'Failed to rename presentation file' });
+  }
+});
+
+
+/**
+ * API endpoint to get the bible verse for a given month.
+ */
+app.get( '/api/verse', async ( req: Request, res: Response ) => {
+  const year = parseInt( req.query.year as string );
+  const month = parseInt( req.query.month as string );
+  if ( !year || !month ) {
+    res.status( 400 ).json({ error: 'Missing year or month' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT reference, text FROM bible_verses WHERE year = ? AND month = ?',
+      [ year, month ]
+    );
+    res.json({
+      reference: rows.length > 0 ? rows[ 0 ].reference : '',
+      text: rows.length > 0 ? ( rows[ 0 ].text || '' ) : '',
+    });
+  } catch ( err ) {
+    res.json({ reference: '', text: '' });
+  }
+});
+
+
+/**
+ * API endpoint to save the bible verse for a given month.
+ */
+app.post( '/api/verse', async ( req: Request, res: Response ) => {
+  const { year, month, reference, text } = req.body || {};
+  if ( !year || !month ) {
+    res.status( 400 ).json({ error: 'Missing year or month' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    if ( ( !reference || reference.trim() === '' ) && ( !text || text.trim() === '' ) ) {
+      await pool.query( 'DELETE FROM bible_verses WHERE year = ? AND month = ?', [ year, month ] );
+    } else {
+      await pool.query(
+        'INSERT INTO bible_verses (year, month, reference, text) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE reference = VALUES(reference), text = VALUES(text)',
+        [ year, month, ( reference || '' ).trim(), text ? text.trim() : null ]
+      );
+    }
+    res.json({ ok: true });
+  } catch ( err ) {
+    res.status( 500 ).json({ error: 'Failed to save verse' });
+  }
+});
+
+
+/**
+ * API endpoint to get the closing song for a given month.
+ */
+app.get( '/api/closing-song', async ( req: Request, res: Response ) => {
+  const year = parseInt( req.query.year as string );
+  const month = parseInt( req.query.month as string );
+  if ( !year || !month ) {
+    res.status( 400 ).json({ error: 'Missing year or month' });
+    return;
+  }
+
+  try {
+    const song = await getClosingSong( year, month );
+    res.json({ song });
+  } catch ( err ) {
+    res.json({ song: null });
+  }
+});
+
+
+/**
+ * API endpoint to set or clear the closing song for a given month.
+ * When set, creates a "closing song" shortcut in every Sunday folder for that month.
+ */
+app.post( '/api/closing-song', ( req: Request, res: Response ) => {
+  ( async () => {
+    try {
+      const { year, month, song } = req.body || {};
+      if ( !year || !month ) {
+        return res.status( 400 ).json({ error: 'Missing year or month' });
+      }
+
+      // Persist the selection in song_selections
+      await setClosingSong( year, month, song || null );
+
+      // Create shortcuts in every Sunday folder for this month
+      if ( song ) {
+        const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+        const sundays = sundaysInMonth( month, year );
+
+        for ( const day of sundays ) {
+          const mm = String( month ).padStart( 2, '0' );
+          const dd = String( day ).padStart( 2, '0' );
+          const dateStr = `${ year }${ mm }${ dd }`;
+          const weekFolder = path.join( outputDir, dateStr );
+
+          if ( !fs.existsSync( weekFolder ) ) continue;
+
+          // Remove existing closing song shortcuts
+          deleteShortcutsByPrefix( weekFolder, 'closing song ' );
+
+          // Find the song file in the library
+          const songFile = findSongFile( song, config.songsDirectory );
+          if ( !songFile ) {
+            console.log( `[CLOSING SONG] Song file not found in library for ${ song.number || '' } ${ song.name }` );
+            continue;
+          }
+
+          const shortcutName = `closing song ${ song.number ? song.number + ' - ' : '' }${ song.name }`.replace( /[\\/:*?"<>|]/g, '_' ) + ' - Shortcut.lnk';
+          const shortcutPath = path.join( weekFolder, shortcutName );
+          const desc = `Closing Song: ${ song.number ? song.number + ' - ' : '' }${ song.name }`;
+          const rootPath = config.rootPath;
+
+          const created = await createShortcut( shortcutPath, desc, songFile, rootPath );
+          if ( created ) {
+            console.log( `[CLOSING SONG] Created shortcut in ${ dateStr }` );
+          } else {
+            console.error( `[CLOSING SONG] Failed to create shortcut in ${ dateStr }` );
+          }
+        }
+      } else {
+        // Song cleared — remove closing song shortcuts from all Sunday folders
+        const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+        const sundays = sundaysInMonth( month, year );
+
+        for ( const day of sundays ) {
+          const mm = String( month ).padStart( 2, '0' );
+          const dd = String( day ).padStart( 2, '0' );
+          const dateStr = `${ year }${ mm }${ dd }`;
+          const weekFolder = path.join( outputDir, dateStr );
+
+          if ( fs.existsSync( weekFolder ) ) {
+            deleteShortcutsByPrefix( weekFolder, 'closing song ' );
+          }
+        }
+      }
+
+      res.json({ ok: true });
+    } catch ( err ) {
+      console.error( '[CLOSING SONG] Error:', err );
+      res.status( 500 ).json({ error: 'Failed to save closing song' });
+    }
+  })();
 });
 
 
@@ -1235,6 +1571,52 @@ async function scanFolders() {
     }
   } catch ( err ) {
     // DB not available or other error — silently skip job detection
+  }
+
+  // Sync song/chorus/closing shortcuts to song_selections table
+  try {
+    const { healthCheck } = require( './db' );
+    if ( !await healthCheck() ) return;
+
+    const songsDir = config.songsDirectory;
+
+    for ( const key of Object.keys( sundayFolders.cache ) ) {
+      const folder = sundayFolders.cache[ key ];
+      const dateStr = key.replace( /-/g, '' );
+      const songs: FolderSongInfo[] = [];
+
+      // Collect songs from the cached SundayFolder
+      if ( folder.song1 ) songs.push({ slotType: 'song', slotNumber: 1, name: folder.song1.name, number: folder.song1.number, book: folder.song1.book, target: folder.song1.target });
+      if ( folder.song2 ) songs.push({ slotType: 'song', slotNumber: 2, name: folder.song2.name, number: folder.song2.number, book: folder.song2.book, target: folder.song2.target });
+      if ( folder.song3 ) songs.push({ slotType: 'song', slotNumber: 3, name: folder.song3.name, number: folder.song3.number, book: folder.song3.book, target: folder.song3.target });
+
+      // Collect choruses
+      folder.choruses.forEach( ( c: any, i: number ) => {
+        songs.push({ slotType: 'chorus', slotNumber: i + 1, name: c.name, book: c.book, target: c.target });
+      });
+
+      // Check for closing song shortcuts by scanning filenames
+      try {
+        const files = await fs.promises.readdir( folder.path );
+        for ( const file of files ) {
+          if ( file.toLowerCase().startsWith( 'closing song ' ) && file.toLowerCase().endsWith( '.lnk' ) ) {
+            const base = file.replace( /\s*-\s*Shortcut\.lnk$/i, '' );
+            const match = base.match( /^closing song\s+(?:(\d+)\s*-\s*)?(.+)$/i );
+            if ( match ) {
+              songs.push({ slotType: 'closing', slotNumber: 1, name: match[ 2 ].trim(), number: match[ 1 ] || undefined });
+            }
+          }
+        }
+      } catch {
+        // Folder not readable for closing song scan — skip
+      }
+
+      if ( songs.length > 0 ) {
+        await syncSelectionsFromFolder( dateStr, songs, songsDir );
+      }
+    }
+  } catch {
+    // DB not available — silently skip sync
   }
 }
 

@@ -1,0 +1,283 @@
+:host {
+  display: block;
+}
+
+.loading {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}
+
+// Stats bar
+.stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  margin-bottom: 16px;
+  background: #2b3035;
+  border-radius: 8px;
+  border: 1px solid rgba( 255, 255, 255, 0.15 );
+}
+
+.stats-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.stat-total {
+  color: #e9ecef;
+  font-weight: 500;
+}
+
+.stat-separator {
+  color: #495057;
+}
+
+.stat-attention {
+  color: #ffc107;
+  font-weight: 500;
+}
+
+.stat-complete {
+  color: #4caf50;
+  font-weight: 500;
+}
+
+.filter-toggles {
+  ::ng-deep .mat-button-toggle-appearance-standard {
+    background: transparent;
+    color: #adb5bd;
+  }
+
+  ::ng-deep .mat-button-toggle-checked .mat-button-toggle-appearance-standard {
+    background: rgba( 110, 168, 254, 0.15 );
+    color: #6ea8fe;
+  }
+}
+
+// Folder rows
+.folders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #2b3035;
+  border-radius: 8px;
+  border: 1px solid rgba( 255, 255, 255, 0.1 );
+  transition: background 0.15s ease;
+
+  &.incomplete {
+    border-left: 3px solid #ffc107;
+  }
+
+  &.complete {
+    border-left: 3px solid #4caf50;
+    opacity: 0.6;
+  }
+
+  &:hover {
+    background: #343a40;
+  }
+}
+
+// Date column
+.folder-date {
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.date-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-text {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #e9ecef;
+}
+
+.stage-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+
+  &.stage-1 {
+    background: rgba( 110, 168, 254, 0.15 );
+    color: #6ea8fe;
+  }
+
+  &.stage-2 {
+    background: rgba( 206, 147, 216, 0.15 );
+    color: #ce93d8;
+  }
+}
+
+.status-divider {
+  color: #495057;
+  font-size: 0.75rem;
+  margin: 0 2px;
+}
+
+.backlog-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgba( 110, 168, 254, 0.15 );
+  color: #6ea8fe;
+  width: fit-content;
+}
+
+// Progress indicator
+.folder-progress {
+  min-width: 70px;
+  max-width: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress-text {
+  font-size: 0.75rem;
+  color: #adb5bd;
+  font-weight: 500;
+}
+
+mat-progress-bar {
+  width: 100%;
+  border-radius: 4px;
+
+  &.progress-complete {
+    --mdc-linear-progress-active-indicator-color: #4caf50;
+    --mdc-linear-progress-track-color: rgba( 76, 175, 80, 0.15 );
+  }
+
+  &.progress-incomplete {
+    --mdc-linear-progress-active-indicator-color: #ffc107;
+    --mdc-linear-progress-track-color: rgba( 255, 193, 7, 0.15 );
+  }
+}
+
+// Status icons
+.folder-status {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+
+  mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.icon-ready {
+  color: #4caf50 !important;
+  opacity: 1 !important;
+}
+
+.icon-missing {
+  color: #adb5bd !important;
+  opacity: 0.3 !important;
+}
+
+.icon-approved {
+  color: #4caf50 !important;
+  opacity: 1 !important;
+  font-size: 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.icon-todo {
+  color: #ffc107 !important;
+  opacity: 0.7 !important;
+  font-size: 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.icon-clickable {
+  cursor: pointer !important;
+
+  &:hover {
+    opacity: 0.8 !important;
+    color: #6ea8fe !important;
+  }
+}
+
+// Missing items chips
+.folder-missing {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.missing-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba( 244, 67, 54, 0.15 );
+  color: #f44336;
+  white-space: nowrap;
+}
+
+// Notes action
+.folder-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-width: 40px;
+  justify-content: center;
+}
+
+.notes-disabled {
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+}
+
+// Empty state
+.empty-state {
+  text-align: center;
+  padding: 64px 16px;
+  color: #6c757d;
+
+  mat-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    margin-bottom: 12px;
+    color: #4caf50;
+  }
+
+  p {
+    font-size: 1rem;
+  }
+}

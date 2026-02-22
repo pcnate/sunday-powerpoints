@@ -86,3 +86,15 @@ export interface JobListResponse {
 export interface HeartbeatResponse {
   continue: boolean;
 }
+
+export interface WorkerInfo {
+  id: string;
+  types: string[];
+  current_job_id: number | null;
+  current_job_type: string | null;
+  last_seen: Date;
+  first_seen: Date;
+  jobs_completed: number;
+  jobs_failed: number;
+  status: 'idle' | 'executing' | 'stale';
+}

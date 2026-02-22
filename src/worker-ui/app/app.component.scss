@@ -1,0 +1,127 @@
+:host {
+  display: block;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+// Status bar
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: #313244;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-active { background: #a6e3a1; }
+.dot-executing { background: #f9e2af; }
+.dot-paused { background: #a6adc8; }
+.dot-off { background: #585b70; }
+.dot-disconnected { background: #f38ba8; }
+
+.status-text {
+  flex: 1;
+}
+
+.phase {
+  font-weight: 500;
+  font-size: 1.1rem;
+}
+
+.job-info {
+  font-size: 0.85rem;
+  color: #a6adc8;
+  margin-top: 2px;
+}
+
+// Stats row
+.stats-row {
+  display: flex;
+  gap: 20px;
+  font-size: 0.85rem;
+  color: #a6adc8;
+  margin-bottom: 24px;
+  padding: 0 4px;
+}
+
+.stat-failed {
+  color: #f38ba8;
+}
+
+// Disconnected warning
+.disconnected-card {
+  margin-bottom: 24px;
+  background: rgba(243, 139, 168, 0.1) !important;
+  border-color: #f38ba8 !important;
+
+  mat-card-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #f38ba8;
+    padding: 8px 0;
+  }
+}
+
+// Config section
+.config-section {
+  h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    font-weight: 500;
+    color: #89b4fa;
+    margin: 24px 0 12px;
+
+    mat-icon {
+      font-size: 20px;
+      width: 20px;
+      height: 20px;
+    }
+  }
+}
+
+.full-width {
+  width: 100%;
+}
+
+.field-row {
+  display: flex;
+  gap: 12px;
+
+  mat-form-field {
+    flex: 1;
+  }
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+
+  label:first-child {
+    font-size: 0.85rem;
+    color: #a6adc8;
+  }
+}
+
+button[mat-raised-button] {
+  margin-top: 8px;
+
+  mat-icon {
+    margin-right: 4px;
+  }
+}

@@ -32,7 +32,6 @@
               }
             ],
             "styles": [
-              "@angular/material/prebuilt-themes/cyan-orange.css",
               "src/webapp/styles.scss"
             ]
           },
@@ -41,13 +40,13 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "500kB",
-                  "maximumError": "1MB"
+                  "maximumWarning": "2MB",
+                  "maximumError": "3MB"
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "4kB",
-                  "maximumError": "8kB"
+                  "maximumWarning": "8kB",
+                  "maximumError": "16kB"
                 }
               ],
               "outputHashing": "all"
@@ -62,6 +61,11 @@
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "host": "0.0.0.0",
+            "allowedHosts": [ "do.unr34l.net" ],
+            "proxyConfig": "src/webapp/proxy.conf.json"
+          },
           "configurations": {
             "production": {
               "buildTarget": "app:build:production"
@@ -91,12 +95,72 @@
               }
             ],
             "styles": [
-              "@angular/material/prebuilt-themes/cyan-orange.css",
               "src/webapp/styles.scss"
             ]
           }
         }
       }
+    },
+    "worker-ui": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src/worker-ui",
+      "prefix": "app",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "outputPath": "dist/worker-ui",
+            "index": "src/worker-ui/index.html",
+            "browser": "src/worker-ui/main.ts",
+            "polyfills": [
+              "zone.js"
+            ],
+            "tsConfig": "./src/worker-ui/tsconfig.app.json",
+            "inlineStyleLanguage": "scss",
+            "styles": [
+              "@angular/material/prebuilt-themes/purple-green.css",
+              "src/worker-ui/styles.scss"
+            ]
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "500kB",
+                  "maximumError": "1MB"
+                }
+              ],
+              "outputHashing": "all"
+            },
+            "development": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular/build:dev-server",
+          "options": {
+            "port": 4201
+          },
+          "configurations": {
+            "production": {
+              "buildTarget": "worker-ui:build:production"
+            },
+            "development": {
+              "buildTarget": "worker-ui:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        }
+      }
     }
+  },
+  "cli": {
+    "analytics": false
   }
 }

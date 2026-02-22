@@ -1,4 +1,156 @@
-/* You can add global styles to this file, and also import other style files */
+@use '@angular/material' as mat;
 
-html, body { height: 100%; }
-body { margin: 0; font-family: Roboto, "Helvetica Neue", sans-serif; }
+// Custom dark theme matching Bootstrap dark palette
+html {
+  @include mat.theme((
+    color: (
+      theme-type: dark,
+      primary: mat.$blue-palette,
+      tertiary: mat.$cyan-palette,
+    ),
+    typography: Roboto,
+    density: 0,
+  ));
+
+  // Override Material 3 surface/background tokens to match Bootstrap dark (#212529)
+  --mat-app-background-color: #212529;
+  --mat-app-text-color: #dee2e6;
+
+  // Toolbar
+  --mat-toolbar-container-background-color: #1a1d21;
+  --mat-toolbar-container-text-color: #dee2e6;
+
+  // Cards — use slightly lighter surface
+  --mdc-elevated-card-container-color: #2b3035;
+  --mdc-outlined-card-container-color: #2b3035;
+  --mdc-outlined-card-outline-color: #495057;
+
+  // Tables
+  --mat-table-background-color: #212529;
+  --mat-table-header-headline-color: #ffffff;
+  --mat-table-row-item-label-text-color: #dee2e6;
+  --mat-table-row-item-outline-color: #495057;
+
+  // Tabs
+  --mat-tab-header-active-label-text-color: #ffffff;
+  --mat-tab-header-active-focus-label-text-color: #ffffff;
+  --mat-tab-header-active-hover-label-text-color: #ffffff;
+  --mat-tab-header-inactive-label-text-color: #6ea8fe;
+  --mat-tab-header-inactive-focus-label-text-color: #6ea8fe;
+  --mat-tab-header-inactive-hover-label-text-color: #8cb8ff;
+  --mat-tab-header-active-focus-indicator-color: #6ea8fe;
+  --mat-tab-header-active-hover-indicator-color: #6ea8fe;
+  --mdc-tab-indicator-active-indicator-color: #6ea8fe;
+  --mdc-secondary-navigation-tab-container-height: 48px;
+
+  // Form fields
+  --mdc-outlined-text-field-outline-color: #495057;
+  --mdc-outlined-text-field-hover-outline-color: #6c757d;
+  --mdc-outlined-text-field-focus-outline-color: #6ea8fe;
+  --mdc-outlined-text-field-label-text-color: #adb5bd;
+  --mdc-outlined-text-field-input-text-color: #dee2e6;
+  --mdc-outlined-text-field-caret-color: #6ea8fe;
+  --mat-select-trigger-text-color: #dee2e6;
+  --mat-select-panel-background-color: #2b3035;
+
+  // Chips
+  --mat-chip-elevated-container-color: #343a40;
+  --mat-chip-label-text-color: #dee2e6;
+  --mat-chip-elevated-selected-container-color: #2b4a7a;
+
+  // Buttons
+  --mdc-text-button-label-text-color: #6ea8fe;
+  --mdc-outlined-button-label-text-color: #6ea8fe;
+  --mdc-outlined-button-outline-color: #495057;
+  --mdc-filled-button-container-color: #375a8c;
+  --mdc-filled-button-label-text-color: #ffffff;
+
+  // Raised buttons
+  --mdc-protected-button-container-color: #343a40;
+  --mdc-protected-button-label-text-color: #dee2e6;
+
+  // Dialog
+  --mdc-dialog-container-color: #2b3035;
+
+  // Snackbar
+  --mdc-snackbar-container-color: #343a40;
+  --mdc-snackbar-supporting-text-color: #dee2e6;
+
+  // Dividers
+  --mat-divider-color: #495057;
+
+  // Icon buttons
+  --mdc-icon-button-icon-color: #adb5bd;
+
+  // Spinner
+  --mdc-circular-progress-active-indicator-color: #6ea8fe;
+
+  // Menu / Option
+  --mat-option-label-text-color: #dee2e6;
+  --mat-option-hover-state-layer-color: rgba(110, 168, 254, 0.08);
+  --mat-option-selected-state-layer-color: rgba(110, 168, 254, 0.12);
+
+  // Tooltip
+  --mdc-plain-tooltip-container-color: #495057;
+  --mdc-plain-tooltip-supporting-text-color: #ffffff;
+
+  // Sort header
+  --mat-sort-arrow-color: #adb5bd;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: Roboto, "Helvetica Neue", sans-serif;
+  background-color: #212529;
+  color: #dee2e6;
+}
+
+// Global overrides for Material components in dark mode
+.mat-mdc-tab-header {
+  background: #1a1d21;
+  border-bottom: 1px solid #495057;
+}
+
+.mat-mdc-table {
+  border: 1px solid #495057;
+  border-radius: 4px;
+
+  .mat-mdc-header-row {
+    background: #1a1d21;
+  }
+
+  .mat-mdc-row:hover {
+    background: rgba(110, 168, 254, 0.04);
+  }
+}
+
+.mat-mdc-form-field {
+  .mdc-notched-outline__leading,
+  .mdc-notched-outline__notch,
+  .mdc-notched-outline__trailing {
+    border-color: #495057 !important;
+  }
+}
+
+// Scrollbar styling for dark theme
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1d21;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #495057;
+  border-radius: 4px;
+
+  &:hover {
+    background: #6c757d;
+  }
+}

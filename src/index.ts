@@ -17,6 +17,7 @@ interface CliArgs {
   help?: boolean;
   rootPath?: string;
   foldersOnly?: boolean;
+  overwrite?: boolean;
   [key: string]: unknown;
 }
 
@@ -41,6 +42,7 @@ if ( require.main !== module ) {
       write: { type: 'boolean', describe: 'Actually write files' },
       rootPath: { type: 'string', describe: 'Root path for OneDriveConsumer variable' },
       foldersOnly: { type: 'boolean', describe: 'Only create folders, do not create files or shortcuts' },
+      overwrite: { type: 'boolean', describe: 'Overwrite existing presentation files' },
     })
     .help( 'help' )
     .alias( 'help', 'h' )
@@ -58,6 +60,7 @@ if ( require.main !== module ) {
   const helpMode: boolean          = !!argv.help;
   const rootPath: string|undefined = argv.rootPath || undefined;
   const foldersOnly: boolean         = !!argv.foldersOnly;
+  const overwrite: boolean           = !!argv.overwrite;
 
   if ( helpMode ) {
     // yargs.showHelp() does not work as expected in this context, so use yargs(hideBin(process.argv)).getHelp() and print it
@@ -75,6 +78,7 @@ if ( require.main !== module ) {
     ext,
     writeMode,
     rootPath,
-    foldersOnly
+    foldersOnly,
+    overwrite
   });
 })();

@@ -38,6 +38,16 @@ Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate 
   - Configuration: `angular.json`
   - The Angular app is being migrated from an older implementation
 
+### Rust Worker
+
+- **Build (debug)**: `cargo check --manifest-path worker/Cargo.toml`
+- **Build (release)**: `cargo build --release --manifest-path worker/Cargo.toml`
+- **Run**: `cargo run --manifest-path worker/Cargo.toml`
+- **Lint**: `cargo clippy --manifest-path worker/Cargo.toml -- -W clippy::all`
+- **Release binary**: `worker/target/release/sunday-worker.exe` (~6 MB)
+- **Config file**: `%APPDATA%\sunday-worker\config.toml` (auto-created on first run)
+- **Web UI**: `http://localhost:9090` (configurable)
+
 ### API Documentation
 
 - **Swagger UI**: Available at `http://localhost:8080/api-docs` when server is running
@@ -62,10 +72,13 @@ Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate 
    - Socket service for real-time server communication
    - Currently in migration (see commit `57bb0d8`)
 
-3. **Rust Worker** (`worker/` - planned)
+3. **Rust Worker** (`worker/`)
    - Windows system tray application for GPU-equipped machine
    - Processes transcription and AI jobs during configured shift windows
    - Communicates only via Express server REST API (no direct DB access)
+   - Two-thread architecture: main thread (winit + tray-icon), tokio thread (scheduler + HTTP)
+   - Config stored at `%APPDATA%\sunday-worker\config.toml`
+   - Embedded web UI at `http://localhost:9090` for config management
 
 ### Job Queue System
 
@@ -94,6 +107,30 @@ The job queue processes a video pipeline for sermon recordings:
 **Job chaining:** Completing a `transcription` job auto-creates a `claude-processing` job.
 
 **Stale recovery:** Every 2 minutes, jobs with heartbeats older than 2 minutes are recovered (retried or failed).
+
+### Rust Worker Architecture (`worker/`)
+
+**Source files:**
+- `src/main.rs` — Entry point: config loading, thread spawning, tray + scheduler wiring
+- `src/config.rs` — TOML config deserialization, load/save, `%APPDATA%` path resolution
+- `src/state.rs` — `AppState` (shared via `Arc<RwLock>`), `SchedulerPhase` enum, `TrayCommand` enum
+- `src/api_client.rs` — reqwest HTTP client wrapping all Express job API calls
+- `src/scheduler.rs` — Shift window logic + polling state machine
+- `src/heartbeat.rs` — Background heartbeat task with `CancellationToken`
+- `src/job_runner.rs` — Job execution orchestrator (dispatches to runners)
+- `src/tray.rs` — System tray icon + menu using winit + tray-icon + muda
+- `src/web_ui.rs` — Embedded axum config web server on port 9090
+- `src/runners/{alignment,transcription,claude}.rs` — **STUB** runners (sleep 5s, return success)
+
+**Scheduler state machine:**
+`OFF_SHIFT → IDLE → POLLING → EXECUTING → COOLDOWN → IDLE` with `PAUSED` toggle
+
+**Communication channels:**
+- `tokio::sync::mpsc` — tray UI commands → scheduler (pause, quit, open config, reload)
+- `Arc<AppState>` with `tokio::sync::RwLock` — scheduler → tray (phase, job info, stats)
+- `CancellationToken` — graceful shutdown propagation
+
+**Tray icon colors:** Green (active/idle), Yellow (executing), Gray (off-shift/paused), Red (disconnected)
 
 ### Database
 

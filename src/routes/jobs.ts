@@ -4,11 +4,124 @@ import { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { getPool } from '../db';
 import {
   Job, JobLog, CreateJobRequest, ClaimJobRequest, HeartbeatRequest,
-  CompleteJobRequest, FailJobRequest, JobLogEntry, JobListQuery
+  CompleteJobRequest, FailJobRequest, JobLogEntry, JobListQuery, WorkerInfo
 } from '../types/job';
 
 const JOB_TYPES = [ 'video-alignment', 'transcription', 'claude-processing' ];
 const JOB_STATUSES = [ 'pending', 'queued', 'processing', 'completed', 'failed', 'cancelled' ];
+
+/** Stale threshold — workers not seen in this many ms are marked stale. */
+const WORKER_STALE_MS = 120_000;
+
+/**
+ * In-memory tracker for connected workers.
+ * Keyed by worker_id, updated on claim, heartbeat, complete, and fail.
+ */
+const workers = new Map<string, {
+  types: string[];
+  current_job_id: number | null;
+  current_job_type: string | null;
+  last_seen: Date;
+  first_seen: Date;
+  jobs_completed: number;
+  jobs_failed: number;
+}>();
+
+
+/**
+ * Record that a worker was seen (claim or heartbeat).
+ *
+ * @param worker_id - the worker identifier
+ * @param types - job types this worker handles (from claim)
+ * @param job_id - current job id if executing
+ * @param job_type - current job type if executing
+ */
+function touchWorker( worker_id: string, types?: string[], job_id?: number | null, job_type?: string | null ): void {
+  const existing = workers.get( worker_id );
+  if ( existing ) {
+    existing.last_seen = new Date();
+    if ( types ) existing.types = types;
+    if ( job_id !== undefined ) existing.current_job_id = job_id;
+    if ( job_type !== undefined ) existing.current_job_type = job_type;
+  } else {
+    workers.set( worker_id, {
+      types: types || [],
+      current_job_id: job_id ?? null,
+      current_job_type: job_type ?? null,
+      last_seen: new Date(),
+      first_seen: new Date(),
+      jobs_completed: 0,
+      jobs_failed: 0,
+    } );
+  }
+}
+
+
+/**
+ * Record a job completion for a worker.
+ *
+ * @param worker_id - the worker identifier
+ */
+function workerJobCompleted( worker_id: string ): void {
+  const w = workers.get( worker_id );
+  if ( w ) {
+    w.jobs_completed++;
+    w.current_job_id = null;
+    w.current_job_type = null;
+    w.last_seen = new Date();
+  }
+}
+
+
+/**
+ * Record a job failure for a worker.
+ *
+ * @param worker_id - the worker identifier
+ */
+function workerJobFailed( worker_id: string ): void {
+  const w = workers.get( worker_id );
+  if ( w ) {
+    w.jobs_failed++;
+    w.current_job_id = null;
+    w.current_job_type = null;
+    w.last_seen = new Date();
+  }
+}
+
+
+/**
+ * Get all tracked workers with computed status.
+ *
+ * @returns array of WorkerInfo objects
+ */
+export function getWorkers(): WorkerInfo[] {
+  const now = Date.now();
+  const result: WorkerInfo[] = [];
+
+  for ( const [ id, w ] of workers ) {
+    const msSinceSeen = now - w.last_seen.getTime();
+    let status: WorkerInfo[ 'status' ] = 'idle';
+    if ( msSinceSeen > WORKER_STALE_MS ) {
+      status = 'stale';
+    } else if ( w.current_job_id !== null ) {
+      status = 'executing';
+    }
+
+    result.push({
+      id,
+      types: w.types,
+      current_job_id: w.current_job_id,
+      current_job_type: w.current_job_type,
+      last_seen: w.last_seen,
+      first_seen: w.first_seen,
+      jobs_completed: w.jobs_completed,
+      jobs_failed: w.jobs_failed,
+      status,
+    });
+  }
+
+  return result;
+}
 
 /**
  * Create the Express Router for all job API endpoints.
@@ -133,6 +246,12 @@ export function createJobRoutes( io: SocketIOServer ): Router {
     }
   } );
 
+  // GET /api/jobs/workers - List connected workers
+  // (must be before /:id to avoid treating "workers" as a job ID)
+  router.get( '/workers', ( _req: Request, res: Response ) => {
+    res.json({ workers: getWorkers() });
+  } );
+
   // GET /api/jobs/:id - Get job details with recent logs
   router.get( '/:id', async ( req: Request, res: Response ) => {
     try {
@@ -253,6 +372,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
 
         if ( rows.length === 0 ) {
           await connection.commit();
+          touchWorker( body.worker_id, validTypes, null, null );
           res.status( 204 ).send();
           return;
         }
@@ -268,6 +388,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
         const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ jobRow.id ] );
         const job = parseJobRow( updated[ 0 ] );
 
+        touchWorker( body.worker_id, validTypes, job.id, job.type );
         io.emit( 'job:updated', job );
         console.log( `[JOBS] Worker '${ body.worker_id }' claimed job #${ job.id } (${ job.type })` );
 
@@ -312,6 +433,8 @@ export function createJobRoutes( io: SocketIOServer ): Router {
 
       params.push( req.params.id );
       await pool.query( `UPDATE jobs SET ${ updateFields.join( ', ' ) } WHERE id = ?`, params );
+
+      touchWorker( body.worker_id, undefined, job.id, job.type );
 
       // Tell the worker to stop if the job was cancelled
       const shouldContinue = job.status === 'processing';
@@ -365,6 +488,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
       const completedJob = parseJobRow( updated[ 0 ] );
 
+      workerJobCompleted( body.worker_id );
       io.emit( 'job:updated', completedJob );
       console.log( `[JOBS] Job #${ completedJob.id } (${ completedJob.type }) completed` );
 
@@ -414,6 +538,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
       const failedJob = parseJobRow( updated[ 0 ] );
 
+      workerJobFailed( body.worker_id );
       io.emit( 'job:updated', failedJob );
       console.log( `[JOBS] Job #${ failedJob.id } (${ failedJob.type }) failed: ${ body.error_message }${ willRetry ? ` (will retry, attempt ${ failedJob.retry_count }/${ failedJob.max_retries })` : ' (no retries left)' }` );
 

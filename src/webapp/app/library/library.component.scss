@@ -1,0 +1,56 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  height: calc( 100vh - 49px - 40px ); // viewport minus tab header minus padding
+}
+
+.filter-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.search-field {
+  flex: 1;
+  max-width: 500px;
+}
+
+.book-field {
+  min-width: 300px;
+}
+
+.song-count {
+  font-size: 0.85rem;
+  color: #6c757d;
+  white-space: nowrap;
+}
+
+.table-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.loading {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}
+
+.songs-table {
+  width: 100%;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 16px;
+  color: #6c757d;
+
+  mat-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    margin-bottom: 12px;
+  }
+}

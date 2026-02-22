@@ -1,0 +1,52 @@
+[package]
+name = "sunday-worker"
+version = "0.1.0"
+edition = "2024"
+description = "System tray worker for sunday-powerpoints job queue"
+publish = false
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# HTTP client for Express API
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# System tray
+tray-icon = "0.21"
+muda = "0.17"
+winit = "0.30"
+
+# Web UI for config
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Time/scheduling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Image loading for tray icons
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Open URLs in default browser
+open = "5"
+
+[build-dependencies]
+winres = "0.1"
+
+[[bin]]
+name = "sunday-worker"
+path = "src/main.rs"

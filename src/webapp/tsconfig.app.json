@@ -11,6 +11,13 @@
     "**/*.ts"
   ],
   "exclude": [
-    "**/*.spec.ts"
+    "**/*.spec.ts",
+    "app/notes-modal/**",
+    "app/output-folders-sidebar/**",
+    "app/song-badge/**",
+    "app/song-library/**",
+    "app/song-select-modal/**",
+    "app/upcoming-songs/**",
+    "app/theme-toggle/**"
   ]
 }

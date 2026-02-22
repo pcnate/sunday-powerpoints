@@ -1,0 +1,168 @@
+<!-- Loading spinner -->
+<div *ngIf="loading" class="loading">
+  <mat-spinner diameter="40"></mat-spinner>
+</div>
+
+<ng-container *ngIf="!loading">
+  <!-- Stats bar with filter toggle -->
+  <div class="stats-bar">
+    <div class="stats-summary">
+      <span class="stat-total">{{ totalCount }} folders</span>
+      <span class="stat-separator">&middot;</span>
+      <span class="stat-attention" *ngIf="needsAttentionCount > 0">
+        {{ needsAttentionCount }} need attention
+      </span>
+      <span class="stat-complete" *ngIf="needsAttentionCount === 0">
+        All complete
+      </span>
+    </div>
+    <mat-button-toggle-group
+      [value]="filterMode"
+      (change)="setFilter( $event.value )"
+      class="filter-toggles">
+      <mat-button-toggle value="attention">Needs Attention</mat-button-toggle>
+      <mat-button-toggle value="all">All</mat-button-toggle>
+    </mat-button-toggle-group>
+  </div>
+
+  <!-- Folder rows -->
+  <div class="folders-list" *ngIf="filteredFolders.length > 0; else emptyState">
+    <div
+      class="folder-row"
+      *ngFor="let folder of filteredFolders"
+      [class.incomplete]="!folder.isComplete"
+      [class.complete]="folder.isComplete">
+
+      <!-- Date + badges -->
+      <div class="folder-date">
+        <div class="date-line">
+          <span class="date-text">{{ folder.displayDate }}</span>
+          <span class="stage-badge" [class.stage-1]="folder.stage === 1" [class.stage-2]="folder.stage === 2">
+            Stage {{ folder.stage }}
+          </span>
+        </div>
+        <span class="backlog-badge" *ngIf="folder.backlog">Backlog</span>
+      </div>
+
+      <!-- Progress indicator -->
+      <div class="folder-progress">
+        <span class="progress-text">{{ folder.completionCount }}/{{ folder.totalItems }}</span>
+        <mat-progress-bar
+          mode="determinate"
+          [value]="completionPercent( folder )"
+          [class.progress-complete]="folder.isComplete"
+          [class.progress-incomplete]="!folder.isComplete">
+        </mat-progress-bar>
+      </div>
+
+      <!-- Stage 1 status icons (always shown) -->
+      <div class="folder-status">
+        <mat-icon
+          [class.icon-ready]="folder.hasSong1"
+          [class.icon-missing]="!folder.hasSong1"
+          [matTooltip]="folder.hasSong1 ? 'Song 1 ready' : 'No Song 1'">
+          looks_one
+        </mat-icon>
+        <mat-icon
+          [class.icon-ready]="folder.hasSong2"
+          [class.icon-missing]="!folder.hasSong2"
+          [matTooltip]="folder.hasSong2 ? 'Song 2 ready' : 'No Song 2'">
+          looks_two
+        </mat-icon>
+        <mat-icon
+          [class.icon-ready]="folder.hasSong3"
+          [class.icon-missing]="!folder.hasSong3"
+          [matTooltip]="folder.hasSong3 ? 'Song 3 ready' : 'No Song 3'">
+          looks_3
+        </mat-icon>
+        <mat-icon
+          [class.icon-ready]="folder.hasPre"
+          [class.icon-missing]="!folder.hasPre"
+          [matTooltip]="folder.hasPre ? (folder.isApproved ? 'Presentation approved' : 'Presentation (needs approval)') : 'No presentation'">
+          slideshow
+        </mat-icon>
+        <mat-icon *ngIf="folder.hasPre"
+          [class.icon-approved]="folder.isApproved"
+          [class.icon-todo]="!folder.isApproved"
+          [matTooltip]="folder.isApproved ? 'Approved' : 'Needs approval'">
+          {{ folder.isApproved ? 'verified' : 'pending' }}
+        </mat-icon>
+
+        <!-- Stage 2 icons (only shown when folder is in Stage 2) -->
+        <ng-container *ngIf="folder.stage === 2">
+          <span class="status-divider">|</span>
+          <mat-icon
+            [class.icon-ready]="folder.hasMp4"
+            [class.icon-missing]="!folder.hasMp4"
+            [matTooltip]="folder.hasMp4 ? 'Video ready' : 'No video'">
+            videocam
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="folder.hasKdenlive"
+            [class.icon-missing]="!folder.hasKdenlive"
+            [matTooltip]="folder.hasKdenlive ? 'Kdenlive project ready' : 'No Kdenlive project'">
+            movie_creation
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="folder.hasProduction"
+            [class.icon-missing]="!folder.hasProduction"
+            [matTooltip]="folder.hasProduction ? 'Production MP4 ready' : 'No production MP4'">
+            movie
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="folder.hasTranscription"
+            [class.icon-missing]="!folder.hasTranscription"
+            [matTooltip]="folder.hasTranscription ? 'Transcription ready' : 'No transcription'">
+            subtitles
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="folder.hasSermonMd"
+            [class.icon-missing]="!folder.hasSermonMd"
+            [matTooltip]="folder.hasSermonMd ? 'Sermon notes ready' : 'No sermon notes'">
+            article
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="!!folder.youtubeUrl"
+            [class.icon-missing]="!folder.youtubeUrl"
+            [class.icon-clickable]="!!folder.youtubeUrl"
+            [matTooltip]="folder.youtubeUrl ? 'Open on YouTube' : 'Not uploaded to YouTube'"
+            (click)="folder.youtubeUrl ? openYoutube( folder.youtubeUrl ) : null">
+            smart_display
+          </mat-icon>
+        </ng-container>
+      </div>
+
+      <!-- Missing items chips -->
+      <div class="folder-missing" *ngIf="!folder.isComplete">
+        <span class="missing-chip" *ngFor="let item of folder.missingItems">{{ item }}</span>
+      </div>
+      <div class="folder-missing" *ngIf="folder.isComplete"></div>
+
+      <!-- Notes button -->
+      <div class="folder-actions">
+        <button
+          mat-icon-button
+          *ngIf="folder.hasNotes"
+          (click)="openNotes( folder )"
+          matTooltip="View notes">
+          <mat-icon class="icon-ready">description</mat-icon>
+        </button>
+        <mat-icon
+          *ngIf="!folder.hasNotes && folder.isPast"
+          class="icon-missing notes-disabled"
+          matTooltip="No notes">
+          note_add
+        </mat-icon>
+      </div>
+    </div>
+  </div>
+
+  <!-- Empty state -->
+  <ng-template #emptyState>
+    <div class="empty-state">
+      <mat-icon>check_circle</mat-icon>
+      <p *ngIf="filterMode === 'attention'">Everything is up to date!</p>
+      <p *ngIf="filterMode === 'all'">No folders found</p>
+    </div>
+  </ng-template>
+</ng-container>

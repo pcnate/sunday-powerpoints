@@ -1,0 +1,24 @@
+[server]
+url = "http://192.168.1.100:8080"
+
+[worker]
+id = "gpu-worker-1"
+types = ["transcription", "claude-processing"]
+
+[schedule]
+shift_start = "02:00"
+shift_end = "06:00"
+
+[timing]
+poll_interval_secs = 30
+heartbeat_interval_secs = 30
+job_delay_secs = 10
+
+[tools]
+whisper_path = "whisper"
+whisper_model = "large-v3"
+claude_path = "claude"
+ffmpeg_path = "ffmpeg"
+
+[web_ui]
+port = 9090

@@ -1,0 +1,124 @@
+<!-- Status Bar -->
+<div class="status-bar">
+  <div class="status-dot" [ngClass]="statusDotClass()"></div>
+  <div class="status-text">
+    <div class="phase">{{ status?.phase || 'Connecting...' }}</div>
+    <div class="job-info" *ngIf="status?.current_job_id">
+      Job #{{ status!.current_job_id }} ({{ status!.current_job_type }})
+    </div>
+  </div>
+  <div class="status-actions">
+    <button mat-stroked-button (click)="togglePause()"
+            [matTooltip]="status?.phase === 'Paused' ? 'Resume scheduler' : 'Pause scheduler'">
+      <mat-icon>{{ status?.phase === 'Paused' ? 'play_arrow' : 'pause' }}</mat-icon>
+      {{ status?.phase === 'Paused' ? 'Resume' : 'Pause' }}
+    </button>
+  </div>
+</div>
+
+<!-- Stats Row -->
+<div class="stats-row" *ngIf="status">
+  <span>{{ status.jobs_completed }} completed</span>
+  <span *ngIf="status.jobs_failed > 0" class="stat-failed">{{ status.jobs_failed }} failed</span>
+  <span>Uptime: {{ formatUptime( status.uptime_secs ) }}</span>
+</div>
+
+<!-- Disconnected Warning -->
+<mat-card class="disconnected-card" *ngIf="!connected" appearance="outlined">
+  <mat-card-content>
+    <mat-icon>cloud_off</mat-icon>
+    <span>Cannot reach worker — is sunday-worker running?</span>
+  </mat-card-content>
+</mat-card>
+
+<!-- Config Form -->
+<div class="config-section">
+  <h2>
+    <mat-icon>dns</mat-icon>
+    Server
+  </h2>
+  <mat-form-field appearance="outline" class="full-width">
+    <mat-label>Server URL</mat-label>
+    <input matInput [(ngModel)]="serverUrl" placeholder="http://192.168.1.100:8080">
+  </mat-form-field>
+
+  <h2>
+    <mat-icon>memory</mat-icon>
+    Worker
+  </h2>
+  <mat-form-field appearance="outline" class="full-width">
+    <mat-label>Worker ID</mat-label>
+    <input matInput [(ngModel)]="workerId">
+  </mat-form-field>
+
+  <div class="checkbox-row">
+    <label>Job Types:</label>
+    <mat-checkbox [(ngModel)]="typeAlignment">Video Alignment</mat-checkbox>
+    <mat-checkbox [(ngModel)]="typeTranscription">Transcription</mat-checkbox>
+    <mat-checkbox [(ngModel)]="typeClaude">Claude Processing</mat-checkbox>
+  </div>
+
+  <h2>
+    <mat-icon>schedule</mat-icon>
+    Schedule
+  </h2>
+  <div class="field-row">
+    <mat-form-field appearance="outline">
+      <mat-label>Shift Start</mat-label>
+      <input matInput [(ngModel)]="shiftStart" placeholder="02:00">
+    </mat-form-field>
+    <mat-form-field appearance="outline">
+      <mat-label>Shift End</mat-label>
+      <input matInput [(ngModel)]="shiftEnd" placeholder="06:00">
+    </mat-form-field>
+  </div>
+
+  <h2>
+    <mat-icon>timer</mat-icon>
+    Timing
+  </h2>
+  <div class="field-row">
+    <mat-form-field appearance="outline">
+      <mat-label>Poll Interval (s)</mat-label>
+      <input matInput type="number" [(ngModel)]="pollInterval">
+    </mat-form-field>
+    <mat-form-field appearance="outline">
+      <mat-label>Heartbeat (s)</mat-label>
+      <input matInput type="number" [(ngModel)]="heartbeatInterval">
+    </mat-form-field>
+    <mat-form-field appearance="outline">
+      <mat-label>Job Delay (s)</mat-label>
+      <input matInput type="number" [(ngModel)]="jobDelay">
+    </mat-form-field>
+  </div>
+
+  <h2>
+    <mat-icon>build</mat-icon>
+    Tool Paths
+  </h2>
+  <div class="field-row">
+    <mat-form-field appearance="outline">
+      <mat-label>Whisper</mat-label>
+      <input matInput [(ngModel)]="whisperPath">
+    </mat-form-field>
+    <mat-form-field appearance="outline">
+      <mat-label>Model</mat-label>
+      <input matInput [(ngModel)]="whisperModel">
+    </mat-form-field>
+  </div>
+  <div class="field-row">
+    <mat-form-field appearance="outline">
+      <mat-label>Claude</mat-label>
+      <input matInput [(ngModel)]="claudePath">
+    </mat-form-field>
+    <mat-form-field appearance="outline">
+      <mat-label>FFmpeg</mat-label>
+      <input matInput [(ngModel)]="ffmpegPath">
+    </mat-form-field>
+  </div>
+
+  <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+    <mat-icon>save</mat-icon>
+    {{ saving ? 'Saving...' : 'Save Configuration' }}
+  </button>
+</div>

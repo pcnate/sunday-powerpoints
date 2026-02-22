@@ -1,21 +1,36 @@
-.main-container {
+.sticky-tabs {
   height: 100vh;
+  overflow: hidden;
+
+  ::ng-deep .mat-mdc-tab-header {
+    z-index: 100;
+    background: #1a1d21;
+    border-bottom: 1px solid #495057;
+  }
+
+  // Ensure the body wrapper fills remaining space after the header
+  ::ng-deep .mat-mdc-tab-body-wrapper {
+    flex: 1;
+    min-height: 0;
+  }
+
+  ::ng-deep .mat-mdc-tab-body {
+    height: 100%;
+  }
+
+  ::ng-deep .mat-mdc-tab-body-content {
+    overflow: hidden !important;
+    height: 100%;
+  }
 }
-.main-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 100;
+
+.tab-icon {
+  margin-right: 6px;
 }
-.spacer {
-  flex: 1 1 auto;
-}
-.sidebar {
-  width: 300px;
-  min-width: 220px;
-  max-width: 350px;
-  box-shadow: -2px 0 8px rgba(0,0,0,0.03);
-  border-left: 1px solid #dee2e6;
-}
-mat-tab-group {
-  margin: 1rem;
+
+.tab-content {
+  padding: 20px 20px 0;
+  height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
 }

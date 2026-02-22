@@ -1,0 +1,1 @@
+ALTER TABLE bible_verses ADD COLUMN text TEXT DEFAULT NULL AFTER reference;

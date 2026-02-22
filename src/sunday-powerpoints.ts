@@ -276,6 +276,7 @@ export interface SundayPowerpointsOptions {
   writeMode: boolean;
   rootPath?: string;
   foldersOnly?: boolean;
+  overwrite?: boolean;
 }
 
 /**
@@ -285,7 +286,7 @@ export interface SundayPowerpointsOptions {
  * @param options - configuration options for the workflow
  */
 export async function runSundayPowerpoints( options: SundayPowerpointsOptions ) {
-  const { month, year, templateDirectory, outputDirectory, SUNDAY_TEMPLATE, ext, writeMode, rootPath, foldersOnly } = options;
+  const { month, year, templateDirectory, outputDirectory, SUNDAY_TEMPLATE, ext, writeMode, rootPath, foldersOnly, overwrite } = options;
   console.log( `${ getMonthName( month ) } ${ year }` );
   console.log( `Using Directory: ${ templateDirectory }` );
   console.log( `Write mode is ${ writeMode ? 'enabled' : 'disabled, use --write to write files' }\r\n` );
@@ -346,7 +347,7 @@ export async function runSundayPowerpoints( options: SundayPowerpointsOptions ) 
           await ensureDir( resolveToAbsolutePath( _outputDirectory ) );
           await ensureDir( resolveToAbsolutePath( vidsDirectory ) );
           await ensureDir( resolveToAbsolutePath( archiveDirectory ) );
-          await writeFile( resolveToAbsolutePath( notesPath ), '\r\nTitle: \r\n\r\n' );
+          await writeFile( resolveToAbsolutePath( notesPath ), 'Title: \r\n\r\n' );
           await copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
           await fixExistingShortcuts( resolveToAbsolutePath( _outputDirectory ), rootPath );
           await createShortcut( path.join( templateDirectory, `${ file } TODO.lnk` ), `Sunday ${ file }`, filePath, rootPath );
@@ -361,6 +362,18 @@ export async function runSundayPowerpoints( options: SundayPowerpointsOptions ) 
           console.log( willCreateFoldersMsg );
           process.send?.({ type: 'info', message: willCreateFoldersMsg });
         }
+      }
+    } else if ( overwrite && !foldersOnly ) {
+      // Shortcut exists but overwrite requested — re-copy the template file
+      if ( writeMode ) {
+        const overwriteMsg = `Overwriting '${ file }.${ ext }' with template`;
+        console.log( overwriteMsg );
+        process.send?.({ type: 'info', message: overwriteMsg });
+        await copyFile( resolveToAbsolutePath( templateFilePath ), resolveToAbsolutePath( filePath ) );
+      } else {
+        const willOverwriteMsg = `Will overwrite '${ filePath }' with template`;
+        console.log( willOverwriteMsg );
+        process.send?.({ type: 'info', message: willOverwriteMsg });
       }
     } else {
       const alreadyExistsMsg = `'${ file }${ existsTodo ? ' TODO' : '' }' already exists${ writeMode ? ', not overwriting' : '' }`;
