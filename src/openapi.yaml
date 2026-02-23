@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Sunday PowerPoints API
   description: API for managing weekly church service PowerPoint presentations, songs, and the video processing job system.
-  version: 1.0.0
+  version: 0.0.0  # overridden at runtime from package.json
 
 servers:
   - url: http://localhost:8080
@@ -93,6 +93,94 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/SongFile'
+
+  /api/songs/create:
+    post:
+      tags: [Songs]
+      summary: Create a new song file from template
+      description: Copies the song template to the target book folder with proper naming.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [book, name]
+              properties:
+                book:
+                  type: string
+                  description: Book/source folder name
+                name:
+                  type: string
+                  description: Song name
+                number:
+                  type: string
+                  description: Optional song number
+                ccli:
+                  type: string
+                  description: Optional CCLI license number
+      responses:
+        '200':
+          description: Song created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  song:
+                    $ref: '#/components/schemas/SongFile'
+        '409':
+          description: File already exists
+
+  /api/books:
+    get:
+      tags: [Songs]
+      summary: List enabled books
+      description: Returns all enabled book/source categories from the database.
+      responses:
+        '200':
+          description: Array of book objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    name:
+                      type: string
+    post:
+      tags: [Songs]
+      summary: Create a new book
+      description: Creates a new book/source category and its directory on disk.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Book created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+                  enabled:
+                    type: boolean
 
   /api/week-song-selections:
     get:
@@ -538,6 +626,101 @@ paths:
                     type: boolean
                   count:
                     type: integer
+
+  # --- Presentation Approval ---
+  /api/folders/{name}/approve:
+    put:
+      tags: [Folders]
+      summary: Approve a presentation
+      description: Renames the TODO .lnk shortcut in the template directory to remove "TODO", marking the presentation as approved.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+          description: Folder name in YYYYMMDD format
+      responses:
+        '200':
+          description: Approved or already approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  oldName:
+                    type: string
+                  newName:
+                    type: string
+                  message:
+                    type: string
+        '400':
+          description: Invalid folder name
+        '500':
+          description: Failed to rename shortcut
+
+  # --- YouTube URL ---
+  /api/youtube-url:
+    get:
+      tags: [Folders]
+      summary: Get YouTube URL for a Sunday
+      parameters:
+        - name: folder
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+          description: Folder name in YYYYMMDD format
+      responses:
+        '200':
+          description: YouTube URL (may be null)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    nullable: true
+        '400':
+          description: Missing folder parameter
+        '500':
+          description: Database error
+    put:
+      tags: [Folders]
+      summary: Set or remove YouTube URL for a Sunday
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [folder]
+              properties:
+                folder:
+                  type: string
+                  description: Folder name in YYYYMMDD format
+                url:
+                  type: string
+                  description: YouTube URL (empty string to remove)
+      responses:
+        '200':
+          description: URL saved or removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '400':
+          description: Missing folder parameter
+        '500':
+          description: Failed to save
 
 components:
   schemas:

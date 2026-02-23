@@ -2,7 +2,7 @@ import { Component, Inject, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
@@ -11,6 +11,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatTableModule } from '@angular/material/table';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { DraggableDialogDirective } from '../shared/draggable-dialog.directive';
+import { CreateSongDialogComponent } from '../library/create-song-dialog.component';
 
 
 /**
@@ -21,6 +22,8 @@ interface LibrarySong {
   number?: string;
   book?: string;
   lastModified?: string;
+  lastUsed?: string;
+  totalUsed?: number;
 }
 
 
@@ -103,6 +106,16 @@ interface DialogData {
             <td mat-cell *matCellDef="let song">{{ song.book || '' }}</td>
           </ng-container>
 
+          <ng-container matColumnDef="lastUsed">
+            <th mat-header-cell *matHeaderCellDef>Last Used</th>
+            <td mat-cell *matCellDef="let song">{{ formatDate( song.lastUsed ) }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="totalUsed">
+            <th mat-header-cell *matHeaderCellDef>Used</th>
+            <td mat-cell *matCellDef="let song">{{ song.totalUsed ?? 0 }}</td>
+          </ng-container>
+
           <ng-container matColumnDef="action">
             <th mat-header-cell *matHeaderCellDef></th>
             <td mat-cell *matCellDef="let song">
@@ -124,6 +137,10 @@ interface DialogData {
     <mat-dialog-actions align="end">
       <button mat-button mat-dialog-close>Cancel</button>
       <button mat-button color="warn" *ngIf="data.currentSong" (click)="clear()">Clear Slot</button>
+      <span class="action-spacer"></span>
+      <button mat-stroked-button (click)="createNew()">
+        <mat-icon>add</mat-icon> Create New
+      </button>
     </mat-dialog-actions>
   `,
   styles: [`
@@ -144,8 +161,8 @@ interface DialogData {
     }
 
     mat-dialog-content {
-      min-width: 550px;
-      max-width: 700px;
+      min-width: 700px;
+      max-width: 900px;
       overflow: visible;
     }
 
@@ -178,6 +195,10 @@ interface DialogData {
       padding: 24px;
       color: #6c757d;
     }
+
+    .action-spacer {
+      flex: 1;
+    }
   `]
 })
 export class SongSelectDialogComponent implements OnInit {
@@ -189,11 +210,12 @@ export class SongSelectDialogComponent implements OnInit {
   selectedBook = '';
   loading = true;
 
-  displayedColumns = [ 'number', 'name', 'book', 'action' ];
+  displayedColumns = [ 'number', 'name', 'book', 'lastUsed', 'totalUsed', 'action' ];
 
 
   constructor(
     private http: HttpClient,
+    private dialog: MatDialog,
     private dialogRef: MatDialogRef<SongSelectDialogComponent>,
     @Inject( MAT_DIALOG_DATA ) public data: DialogData
   ) {}
@@ -272,5 +294,36 @@ export class SongSelectDialogComponent implements OnInit {
    */
   clear(): void {
     this.dialogRef.close({ name: '', number: '' });
+  }
+
+
+  /**
+   * Format a YYYYMMDD date string into a readable date.
+   *
+   * @param dateStr - date in YYYYMMDD format
+   * @returns formatted date string, or empty string if not provided
+   */
+  formatDate( dateStr?: string ): string {
+    if ( !dateStr || dateStr.length !== 8 ) return '';
+    const y = parseInt( dateStr.slice( 0, 4 ) );
+    const m = parseInt( dateStr.slice( 4, 6 ) ) - 1;
+    const d = parseInt( dateStr.slice( 6, 8 ) );
+    return new Date( y, m, d ).toLocaleDateString( 'en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+
+  /**
+   * Open the create song dialog. On success, auto-select the newly created song.
+   */
+  createNew(): void {
+    const createRef = this.dialog.open( CreateSongDialogComponent, {
+      width: '550px',
+    });
+
+    createRef.afterClosed().subscribe( ( result: { name: string; number?: string; book?: string } | undefined ) => {
+      if ( result ) {
+        this.dialogRef.close({ name: result.name, number: result.number, book: result.book });
+      }
+    });
   }
 }

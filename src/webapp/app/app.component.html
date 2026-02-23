@@ -1,38 +1,48 @@
-<mat-tab-group animationDuration="200ms" class="sticky-tabs">
+<mat-tab-group animationDuration="200ms" class="sticky-tabs"
+               [selectedIndex]="selectedIndex"
+               (selectedIndexChange)="onTabChange( $event )">
   <mat-tab>
     <ng-template mat-tab-label>
       <mat-icon class="tab-icon">edit_calendar</mat-icon> Planning
     </ng-template>
-    <div class="tab-content">
-      <app-upcoming></app-upcoming>
-    </div>
+    <ng-template matTabContent>
+      <div class="tab-content">
+        <app-upcoming></app-upcoming>
+      </div>
+    </ng-template>
   </mat-tab>
 
   <mat-tab>
     <ng-template mat-tab-label>
       <mat-icon class="tab-icon">library_music</mat-icon> Library
     </ng-template>
-    <div class="tab-content">
-      <app-library></app-library>
-    </div>
+    <ng-template matTabContent>
+      <div class="tab-content">
+        <app-library></app-library>
+      </div>
+    </ng-template>
   </mat-tab>
 
   <mat-tab>
     <ng-template mat-tab-label>
       <mat-icon class="tab-icon">assignment_late</mat-icon> Outstanding
     </ng-template>
-    <div class="tab-content">
-      <app-outstanding></app-outstanding>
-    </div>
+    <ng-template matTabContent>
+      <div class="tab-content">
+        <app-outstanding></app-outstanding>
+      </div>
+    </ng-template>
   </mat-tab>
 
   <mat-tab>
     <ng-template mat-tab-label>
       <mat-icon class="tab-icon">list_alt</mat-icon> Jobs
     </ng-template>
-    <div class="tab-content">
-      <app-jobs></app-jobs>
-    </div>
+    <ng-template matTabContent>
+      <div class="tab-content">
+        <app-jobs></app-jobs>
+      </div>
+    </ng-template>
   </mat-tab>
 
 </mat-tab-group>

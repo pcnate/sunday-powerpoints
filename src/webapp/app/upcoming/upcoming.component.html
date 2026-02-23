@@ -40,6 +40,7 @@
   </button>
 
   <button mat-stroked-button color="primary"
+          [disabled]="isPreviousMonth"
           (click)="copyTemplate()"
           matTooltip="Copy template to Sunday folders">
     <mat-icon>file_copy</mat-icon>
@@ -49,8 +50,9 @@
 
 <!-- Week cards -->
 <div class="weeks-grid">
-    <mat-card *ngFor="let week of weeks; let wi = index" class="week-card"
-              [class.has-thumbnail]="!!week.folder?.thumbnail" appearance="outlined">
+    <mat-card *ngFor="let week of weeks; let wi = index; trackBy: trackByDate" class="week-card"
+              [class.has-thumbnail]="!!week.folder?.thumbnail"
+              [class.past]="isWeekLocked( week )" appearance="outlined">
 
       <!-- Fixed-size thumbnail (absolute, doesn't affect layout) -->
       <div class="card-thumbnail" *ngIf="week.folder?.thumbnail">
@@ -63,37 +65,66 @@
           <mat-card-title>{{ week.label }}</mat-card-title>
           <mat-card-subtitle>{{ week.date }}</mat-card-subtitle>
           <div class="week-status-icons">
-            <mat-icon *ngIf="week.folder?.hasPre" matTooltip="Presentation ready"
+            <mat-icon *ngIf="week.folder?.hasPre && !week.folder?.isApproved" matTooltip="Presentation ready"
                       class="status-icon ready">slideshow</mat-icon>
-            <!-- Approval button: only shown when presentation exists but not approved -->
+            <!-- Approval button: only shown when presentation exists, not approved, and no video -->
             <button mat-icon-button class="approve-button"
-                    *ngIf="week.folder?.hasPre && !week.folder?.isApproved"
+                    *ngIf="week.folder?.hasPre && !week.folder?.isApproved && !week.folder?.hasMp4"
+                    [disabled]="isWeekLocked( week )"
                     (click)="approvePresentation( week )"
                     matTooltip="Approve presentation (remove TODO)">
               <mat-icon class="status-icon todo">pending</mat-icon>
             </button>
-            <mat-icon *ngIf="week.folder?.hasPre && week.folder?.isApproved"
-                      class="status-icon approved"
-                      matTooltip="Presentation approved">verified</mat-icon>
-            <mat-icon *ngIf="week.folder?.hasMp4" matTooltip="Video available"
+            <a *ngIf="week.folder?.youtubeUrl" [href]="week.folder!.youtubeUrl"
+               target="_blank" rel="noopener" class="youtube-link"
+               matTooltip="Open on YouTube">
+              <mat-icon class="status-icon ready">smart_display</mat-icon>
+            </a>
+            <mat-icon *ngIf="week.folder?.hasMp4 && !week.folder?.youtubeUrl"
+                      [matTooltip]="week.folder?.videoFileName || 'Video available'"
                       class="status-icon ready">videocam</mat-icon>
             <mat-icon class="status-icon notes-icon" [class.ready]="week.folder?.hasNotes"
-                      [matTooltip]="week.folder?.hasNotes ? 'Edit notes' : 'Add notes'"
+                      [matTooltip]="week.folder?.hasNotes || 'Add notes'"
                       (click)="openNotes( week )">
               {{ week.folder?.hasNotes ? 'description' : 'note_add' }}
             </mat-icon>
+            <!-- Overflow menu -->
+            <button mat-icon-button class="card-menu-button"
+                    [matMenuTriggerFor]="cardMenu">
+              <mat-icon class="status-icon">more_vert</mat-icon>
+            </button>
+            <mat-menu #cardMenu="matMenu">
+              <button mat-menu-item *ngIf="isPastSunday( week.date )"
+                      (click)="toggleEditPastWeek( week )">
+                <mat-icon>{{ isWeekLocked( week ) ? 'edit' : 'edit_off' }}</mat-icon>
+                <span>{{ isWeekLocked( week ) ? 'Enable editing' : 'Lock editing' }}</span>
+              </button>
+              <button mat-menu-item (click)="openNotes( week )">
+                <mat-icon>{{ week.folder?.hasNotes ? 'description' : 'note_add' }}</mat-icon>
+                <span>{{ week.folder?.hasNotes ? 'Edit notes' : 'Add notes' }}</span>
+              </button>
+              <button mat-menu-item *ngIf="isPastSunday( week.date )"
+                      (click)="openYoutubeDialog( week )">
+                <mat-icon>smart_display</mat-icon>
+                <span>{{ week.folder?.youtubeUrl ? 'Edit YouTube URL' : 'Set YouTube URL' }}</span>
+              </button>
+            </mat-menu>
           </div>
         </mat-card-header>
 
         <div class="chorus-list" *ngIf="( week.selection?.choruses || [] ).length > 0">
-          <button mat-stroked-button class="chorus-button"
-                  *ngFor="let c of week.selection?.choruses || []; let ci = index"
-                  (click)="editChorus( wi, ci )">
-            <span class="chorus-index">{{ ci + 1 }}</span>
-            {{ songDisplay( c ) }}
-          </button>
+          <div class="song-slot" *ngFor="let c of week.selection?.choruses || []; let ci = index"
+               [matTooltip]="c.shortcut || ''">
+            <span class="slot-label">Chorus {{ ci + 1 }}</span>
+            <button mat-stroked-button class="chorus-button"
+                    [disabled]="isWeekLocked( week )"
+                    (click)="editChorus( wi, ci )">
+              {{ songDisplay( c ) }}
+            </button>
+          </div>
         </div>
         <button mat-stroked-button class="add-chorus-button"
+                [disabled]="isWeekLocked( week )"
                 (click)="addChorus( wi )">
           <mat-icon>add</mat-icon>
           Chorus
@@ -101,16 +132,27 @@
       </div>
 
       <mat-card-content>
+        <div class="verse-slot">
+          <mat-icon class="verse-icon">campaign</mat-icon>
+          <span class="verse-ref">Announcements</span>
+        </div>
+
         <!-- Song slots with verse between 1 and 2 -->
         <div class="song-slots">
-          <div class="song-slot">
+          <div class="song-slot" [matTooltip]="week.selection?.songs?.[0]?.shortcut || ''">
             <span class="slot-label">Song 1</span>
-            <button mat-stroked-button class="song-button"
-                    [class.empty]="!week.selection?.songs?.[0]"
-                    (click)="selectSong( wi, 1 )">
-              <mat-icon *ngIf="!week.selection?.songs?.[0]">add</mat-icon>
-              {{ songDisplay( week.selection?.songs?.[0] ?? null ) }}
-            </button>
+            <div class="skeleton-bar" *ngIf="loading; else song1">
+              <div class="skeleton-shimmer"></div>
+            </div>
+            <ng-template #song1>
+              <button mat-stroked-button class="song-button"
+                      [class.empty]="!week.selection?.songs?.[0]"
+                      [disabled]="isWeekLocked( week )"
+                      (click)="selectSong( wi, 1 )">
+                <mat-icon *ngIf="!week.selection?.songs?.[0]">add</mat-icon>
+                {{ songDisplay( week.selection?.songs?.[0] ?? null ) }}
+              </button>
+            </ng-template>
           </div>
 
           <div class="verse-slot" *ngIf="verseReference; else noVerse">
@@ -125,24 +167,36 @@
             </div>
           </ng-template>
 
-          <div class="song-slot">
+          <div class="song-slot" [matTooltip]="week.selection?.songs?.[1]?.shortcut || ''">
             <span class="slot-label">Song 2</span>
-            <button mat-stroked-button class="song-button"
-                    [class.empty]="!week.selection?.songs?.[1]"
-                    (click)="selectSong( wi, 2 )">
-              <mat-icon *ngIf="!week.selection?.songs?.[1]">add</mat-icon>
-              {{ songDisplay( week.selection?.songs?.[1] ?? null ) }}
-            </button>
+            <div class="skeleton-bar" *ngIf="loading; else song2">
+              <div class="skeleton-shimmer"></div>
+            </div>
+            <ng-template #song2>
+              <button mat-stroked-button class="song-button"
+                      [class.empty]="!week.selection?.songs?.[1]"
+                      [disabled]="isWeekLocked( week )"
+                      (click)="selectSong( wi, 2 )">
+                <mat-icon *ngIf="!week.selection?.songs?.[1]">add</mat-icon>
+                {{ songDisplay( week.selection?.songs?.[1] ?? null ) }}
+              </button>
+            </ng-template>
           </div>
 
-          <div class="song-slot">
+          <div class="song-slot" [matTooltip]="week.selection?.songs?.[2]?.shortcut || ''">
             <span class="slot-label">Song 3</span>
-            <button mat-stroked-button class="song-button"
-                    [class.empty]="!week.selection?.songs?.[2]"
-                    (click)="selectSong( wi, 3 )">
-              <mat-icon *ngIf="!week.selection?.songs?.[2]">add</mat-icon>
-              {{ songDisplay( week.selection?.songs?.[2] ?? null ) }}
-            </button>
+            <div class="skeleton-bar" *ngIf="loading; else song3">
+              <div class="skeleton-shimmer"></div>
+            </div>
+            <ng-template #song3>
+              <button mat-stroked-button class="song-button"
+                      [class.empty]="!week.selection?.songs?.[2]"
+                      [disabled]="isWeekLocked( week )"
+                      (click)="selectSong( wi, 3 )">
+                <mat-icon *ngIf="!week.selection?.songs?.[2]">add</mat-icon>
+                {{ songDisplay( week.selection?.songs?.[2] ?? null ) }}
+              </button>
+            </ng-template>
           </div>
 
           <div class="verse-slot" *ngIf="closingSong; else noClosing" [class.closing]="true">
@@ -158,6 +212,13 @@
           </ng-template>
         </div>
       </mat-card-content>
+
+      <!-- Presentation info footer -->
+      <div class="card-pre-footer" *ngIf="week.folder?.presentationName">
+        <span class="pre-name"><mat-icon>slideshow</mat-icon>{{ week.folder!.presentationName }}</span>
+        <span class="pre-detail">{{ week.folder!.presentationModified }}</span>
+        <span class="pre-detail">{{ week.folder!.presentationSize }}</span>
+      </div>
     </mat-card>
   </div>
 

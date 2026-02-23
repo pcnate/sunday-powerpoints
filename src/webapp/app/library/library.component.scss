@@ -24,6 +24,12 @@
   font-size: 0.85rem;
   color: #6c757d;
   white-space: nowrap;
+  flex: 1;
+}
+
+.create-button {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .table-scroll {

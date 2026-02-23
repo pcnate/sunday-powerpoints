@@ -5,12 +5,12 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import ws from 'windows-shortcuts';
 const schedule = require( 'node-schedule' );
-import { createShortcut, sundaysInMonth } from './sunday-powerpoints';
-import { getClosingSong, setClosingSong, syncSelectionsFromFolder, FolderSongInfo } from './songs-db';
+import { createShortcut, sundaysInMonth, resolveToAbsolutePath } from './sunday-powerpoints';
+import { getClosingSong, setClosingSong, syncSelectionsFromFolder, findOrCreateSong, normalizeSongName, FolderSongInfo } from './songs-db';
 import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
 import { initDb, closeDb, getPool } from './db';
-import { RowDataPacket } from 'mysql2/promise';
+import { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { createJobRoutes, recoverStaleJobs, createJobIfNotExists } from './routes/jobs';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
@@ -373,6 +373,60 @@ async function getShortcutTarget( shortcutPath: fs.PathLike ): Promise<string | 
 }
 
 
+/** Resolved OneDrive root (computed once after config is loaded). */
+let oneDriveRootNormalised = '';
+
+
+/**
+ * Make any absolute path relative to the OneDrive root.
+ * Returns the path with forward slashes, e.g. "PowerPoints/songs/203 - Name.pptx".
+ * If the path doesn't fall under the OneDrive root, returns it normalised as-is.
+ *
+ * @param absolutePath - an absolute filesystem path (may contain env vars like %OneDriveConsumer%)
+ * @returns path relative to OneDrive root
+ */
+function toRelativePath( absolutePath: string ): string {
+  if ( !oneDriveRootNormalised ) {
+    oneDriveRootNormalised = resolveToAbsolutePath( config.rootPath || '%OneDriveConsumer%' )
+      .replace( /\\/g, '/' ).replace( /\/$/, '' );
+  }
+  const resolved = resolveToAbsolutePath( absolutePath ).replace( /\\/g, '/' );
+  if ( resolved.toLowerCase().startsWith( oneDriveRootNormalised.toLowerCase() ) ) {
+    return resolved.slice( oneDriveRootNormalised.length + 1 );
+  }
+  return resolved;
+}
+
+
+/** Cache for resolved shortcut targets (path → relative target). Cleared every 5 minutes. */
+const shortcutTargetCache = new Map<string, string>();
+setInterval( () => shortcutTargetCache.clear(), 5 * 60 * 1000 );
+
+
+/**
+ * Resolve a shortcut's target path and return it relative to the OneDrive root.
+ * Results are cached to avoid repeated ws.query calls for the same shortcut.
+ *
+ * @param shortcutFullPath - absolute path to the .lnk file
+ * @param fallbackName - display name if resolution fails
+ * @returns relative path string
+ */
+async function getRelativeTarget( shortcutFullPath: string, fallbackName: string ): Promise<string> {
+  const cached = shortcutTargetCache.get( shortcutFullPath );
+  if ( cached !== undefined ) return cached;
+
+  const target = await getShortcutTarget( shortcutFullPath );
+  if ( !target ) {
+    shortcutTargetCache.set( shortcutFullPath, fallbackName );
+    return fallbackName;
+  }
+
+  const result = toRelativePath( target );
+  shortcutTargetCache.set( shortcutFullPath, result );
+  return result;
+}
+
+
 /**
  * Class representing a chorus shortcut
  * 
@@ -654,7 +708,9 @@ const config = {
   templateDirectory: process.env.TEMPLATE_DIRECTORY || '/input',
   outputDirectory: process.env.OUTPUT_DIRECTORY || '/output',
   rootPath: process.env.ROOT_PATH || '%OneDriveConsumer%',
-  songsDirectory: process.env.SONGS_DIRECTORY || '/songs' // default to /songs if not set
+  songsDirectory: process.env.SONGS_DIRECTORY || '/songs', // default to /songs if not set
+  songTemplate: process.env.SONG_TEMPLATE || '000 - Song Template.pptx',
+  appName: process.env.APP_NAME || 'Sunday PowerPoints',
 };
 
 if ( !config.templateFile ) {
@@ -692,12 +748,21 @@ io.on( 'connection', ( socket ) => {
   });
 });
 
-// Swagger UI
+// Swagger UI — inject version from package.json
+const pkgVersion = JSON.parse( fs.readFileSync( path.join( __dirname, '..', 'package.json' ), 'utf-8' ) ).version;
 const openapiSpec = YAML.parse( fs.readFileSync( path.join( __dirname, 'openapi.yaml' ), 'utf-8' ) );
-app.use( '/api-docs', swaggerUi.serve, swaggerUi.setup( openapiSpec ) );
+openapiSpec.info.version = pkgVersion;
+app.use( '/swagger-ui', swaggerUi.serve, swaggerUi.setup( openapiSpec ) );
 app.get( '/openapi.yaml', ( _req: Request, res: Response ) => {
-  res.type( 'text/yaml' ).send( fs.readFileSync( path.join( __dirname, 'openapi.yaml' ), 'utf-8' ) );
+  const spec = YAML.parse( fs.readFileSync( path.join( __dirname, 'openapi.yaml' ), 'utf-8' ) );
+  spec.info.version = pkgVersion;
+  res.type( 'text/yaml' ).send( YAML.stringify( spec ) );
 });
+
+// App config endpoint — exposes non-sensitive configuration to the frontend
+app.get( '/api/app-config', ( _req: Request, res: Response ) => {
+  res.json( { appName: config.appName, version: pkgVersion } );
+} );
 
 // Log all /api requests, except /api/webapp-last-modified
 app.use( '/api', ( req, res, next ) => {
@@ -724,13 +789,35 @@ app.use( '/api/jobs', createJobRoutes( io ) );
 async function scanFolderMetadata( folderPath: string, folderName: string, backlog: boolean ) {
   let hasPre = false;
   let isApproved = false;
+  let presentationName: string | null = null;
+  let presentationSize: string | null = null;
+  let presentationModified: string | null = null;
   let files: string[] = [];
   try {
     files = await fs.promises.readdir( folderPath );
     const preFile = files.find( f => f.toLowerCase().endsWith( '.' + config.ext.toLowerCase() ) );
     hasPre = !!preFile;
-    // Approved = presentation exists and filename does NOT contain "TODO"
-    isApproved = hasPre && !!preFile && !preFile.toUpperCase().includes( 'TODO' );
+    // Approved = shortcut in template directory does NOT have "TODO" in its name
+    if ( hasPre ) {
+      const dateStr = folderName.replace( /(\d{4})(\d{2})(\d{2})/, '$1-$2-$3' );
+      const todoLnk = `${ dateStr } TODO.lnk`;
+      try {
+        await fs.promises.access( path.join( config.templateDirectory, todoLnk ) );
+        isApproved = false;
+      } catch {
+        isApproved = true;
+      }
+    }
+
+    if ( preFile ) {
+      presentationName = preFile;
+      try {
+        const stat = await fs.promises.stat( path.join( folderPath, preFile ) );
+        const kb = stat.size / 1024;
+        presentationSize = kb >= 1024 ? `${ ( kb / 1024 ).toFixed( 2 ) } MB` : `${ kb.toFixed( 2 ) } KB`;
+        presentationModified = stat.mtime.toLocaleString();
+      } catch {}
+    }
   } catch {}
 
   const vidsPath = path.join( folderPath, 'Vids' );
@@ -743,7 +830,8 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     const vidsFiles = await fs.promises.readdir( vidsPath );
     hasMp4 = vidsFiles.some( f => f.toLowerCase().endsWith( '.mp4' ) );
     if ( hasMp4 ) {
-      videoFileName = vidsFiles.find( f => f.toLowerCase().endsWith( '.mp4' ) );
+      const mp4File = vidsFiles.find( f => f.toLowerCase().endsWith( '.mp4' ) );
+      videoFileName = mp4File ? toRelativePath( path.join( vidsPath, mp4File ) ) : null;
     }
     const thumbFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.jpeg' ) || f.toLowerCase().endsWith( '.thm' ) );
     if ( thumbFile ) {
@@ -766,11 +854,15 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     if ( /^\d{8}-sermon\.md$/i.test( f ) ) hasSermonMd = true;
   });
 
-  const hasNotes = hasNotesFile( folderName, files );
+  const notesFile = hasNotesFile( folderName, files );
+  const hasNotes = notesFile ? toRelativePath( path.join( folderPath, notesFile ) ) : null;
   return {
     name: folderName,
     hasPre,
     isApproved,
+    presentationName,
+    presentationSize,
+    presentationModified,
     hasMp4,
     thumbnail,
     videoFileName,
@@ -859,12 +951,12 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
  *
  * @param folderName - name of the folder
  * @param files - list of filenames in the folder
- * @returns true if a notes file matching the expected pattern exists
+ * @returns the notes filename if found, or null
  */
-function hasNotesFile( folderName: string, files: string[] ): boolean {
+function hasNotesFile( folderName: string, files: string[] ): string | null {
   // Match notes file: YYYYMMDD-notes.txt, YYYY-MM-DD-notes.txt, YYYYMMDD Notes.txt, YYYY-MM-DD Notes.txt (case-insensitive, flexible on dash/space)
   const notesRegex = /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i;
-  return files.some( f => notesRegex.test( f ) );
+  return files.find( f => notesRegex.test( f ) ) || null;
 }
 
 
@@ -1155,7 +1247,7 @@ app.put( '/api/youtube-url', async ( req: Request, res: Response ) => {
 
 
 /**
- * API endpoint to approve a presentation by renaming the PPTX file to remove "TODO".
+ * API endpoint to approve a presentation by renaming the TODO .lnk shortcut in the template directory.
  */
 app.put( '/api/folders/:name/approve', async ( req: Request, res: Response ) => {
   const folderName = req.params.name;
@@ -1164,50 +1256,28 @@ app.put( '/api/folders/:name/approve', async ( req: Request, res: Response ) => 
     return;
   }
 
-  const folderPath = path.join( config.outputDirectory, folderName );
-  let files: string[] = [];
+  const dateStr = folderName.replace( /(\d{4})(\d{2})(\d{2})/, '$1-$2-$3' );
+  const todoLnk = `${ dateStr } TODO.lnk`;
+  const doneLnk = `${ dateStr }.lnk`;
+  const oldPath = path.join( config.templateDirectory, todoLnk );
+  const newPath = path.join( config.templateDirectory, doneLnk );
+
   try {
-    files = await fs.promises.readdir( folderPath );
+    await fs.promises.access( oldPath );
   } catch {
-    res.status( 404 ).json({ error: 'Folder not found' });
+    // No TODO shortcut — already approved or missing
+    res.json({ ok: true, message: 'Already approved' });
     return;
   }
-
-  // Find the presentation file with "TODO" in its name
-  const ext = '.' + config.ext.toLowerCase();
-  const todoFile = files.find( f =>
-    f.toLowerCase().endsWith( ext ) && f.toUpperCase().includes( 'TODO' )
-  );
-
-  if ( !todoFile ) {
-    // Check if already approved
-    const hasPresentation = files.some( f => f.toLowerCase().endsWith( ext ) );
-    if ( hasPresentation ) {
-      res.json({ ok: true, message: 'Already approved' });
-    } else {
-      res.status( 404 ).json({ error: 'No presentation file found' });
-    }
-    return;
-  }
-
-  // Rename to remove "TODO" (and clean up extra spaces/dashes)
-  const newName = todoFile
-    .replace( /TODO\s*-?\s*/gi, '' )
-    .replace( /\s*-?\s*TODO/gi, '' )
-    .replace( /\s{2,}/g, ' ' )
-    .trim();
-
-  const oldPath = path.join( folderPath, todoFile );
-  const newPath = path.join( folderPath, newName );
 
   try {
     await fs.promises.rename( oldPath, newPath );
-    console.log( `[APPROVE] Renamed "${ todoFile }" → "${ newName }" in ${ folderName }` );
+    console.log( `[APPROVE] Renamed "${ todoLnk }" → "${ doneLnk }" in template directory` );
     io.emit( 'folder-changes', { name: folderName } );
-    res.json({ ok: true, oldName: todoFile, newName });
+    res.json({ ok: true, oldName: todoLnk, newName: doneLnk });
   } catch ( err ) {
-    console.error( `[APPROVE] Failed to rename in ${ folderName }:`, err );
-    res.status( 500 ).json({ error: 'Failed to rename presentation file' });
+    console.error( `[APPROVE] Failed to rename shortcut for ${ folderName }:`, err );
+    res.status( 500 ).json({ error: 'Failed to rename shortcut' });
   }
 });
 
@@ -1363,11 +1433,19 @@ app.post( '/api/closing-song', ( req: Request, res: Response ) => {
 
 
 /**
- * API endpoint to list songs in songsDirectory
+ * API endpoint to list songs in songsDirectory, enriched with DB stats.
  */
 app.get( '/api/songs', async ( req: Request, res: Response ) => {
   const songsDir = config.songsDirectory;
-  let songFiles: { name: string, number?: string, book?: string, lastModified?: string }[] = [];
+  let songFiles: {
+    name: string;
+    number?: string;
+    book?: string;
+    lastModified?: string;
+    ccli?: string;
+    lastUsed?: string;
+    totalUsed?: number;
+  }[] = [];
   const ext = '.' + ( config.ext || 'pptx' ).toLowerCase();
 
   /**
@@ -1409,7 +1487,177 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
   }
 
   await walk( songsDir );
+
+  // Enrich with CCLI, last used date, and total usage from the database
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      `SELECT s.normalized_name, s.number, s.book, s.ccli,
+              COUNT( sel.id ) AS total_used,
+              MAX( sel.sunday_date ) AS last_used
+       FROM songs s
+       LEFT JOIN song_selections sel ON sel.song_id = s.id AND sel.removed_at IS NULL
+       GROUP BY s.id`
+    );
+
+    // Build lookup map: "normalized|number|book" → { ccli, lastUsed, totalUsed }
+    const statsMap = new Map<string, { ccli?: string; lastUsed?: string; totalUsed: number }>();
+    for ( const row of rows ) {
+      const key = `${ row.normalized_name }|${ row.number || '' }|${ ( row.book || '' ).toLowerCase() }`;
+      statsMap.set( key, {
+        ccli: row.ccli || undefined,
+        lastUsed: row.last_used || undefined,
+        totalUsed: Number( row.total_used ) || 0,
+      });
+    }
+
+    // Merge DB stats into filesystem song list
+    for ( const song of songFiles ) {
+      const normalized = normalizeSongName( song.name );
+      const key = `${ normalized }|${ song.number || '' }|${ ( song.book || '' ).toLowerCase() }`;
+      const stats = statsMap.get( key );
+      if ( stats ) {
+        song.ccli = stats.ccli;
+        song.lastUsed = stats.lastUsed;
+        song.totalUsed = stats.totalUsed;
+      } else {
+        song.totalUsed = 0;
+      }
+    }
+  } catch {
+    // DB not available — return songs without stats
+  }
+
   res.json( songFiles );
+});
+
+
+/**
+ * Get all enabled books from the database.
+ */
+app.get( '/api/books', async ( _req: Request, res: Response ) => {
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT id, name FROM books WHERE enabled = TRUE ORDER BY name'
+    );
+    res.json( rows );
+  } catch {
+    // DB not available — fall back to scanning the songs directory
+    try {
+      const entries = await fs.promises.readdir( config.songsDirectory, { withFileTypes: true } );
+      const books = entries
+        .filter( e => e.isDirectory() )
+        .map( ( e, i ) => ({ id: i + 1, name: e.name }) )
+        .sort( ( a, b ) => a.name.localeCompare( b.name ) );
+      res.json( books );
+    } catch {
+      res.json( [] );
+    }
+  }
+});
+
+
+/**
+ * Create a new book (directory + DB row).
+ */
+app.post( '/api/books', async ( req: Request, res: Response ) => {
+  const { name } = req.body || {};
+  if ( !name || typeof name !== 'string' || !name.trim() ) {
+    res.status( 400 ).json({ error: 'Book name is required' });
+    return;
+  }
+
+  const trimmed = name.trim();
+
+  try {
+    // Create the folder on disk
+    await fs.promises.mkdir( path.join( config.songsDirectory, trimmed ), { recursive: true } );
+
+    // Insert into DB
+    const pool = getPool();
+    const [ result ] = await pool.query<ResultSetHeader>(
+      'INSERT INTO books (name) VALUES (?) ON DUPLICATE KEY UPDATE enabled = TRUE',
+      [ trimmed ]
+    );
+    const id = result.insertId || 0;
+    res.json({ id, name: trimmed, enabled: true });
+  } catch ( err: any ) {
+    console.error( '[BOOKS] Error creating book:', err );
+    res.status( 500 ).json({ error: 'Failed to create book' });
+  }
+});
+
+
+/**
+ * Create a new song file by copying the song template to the target book folder.
+ */
+app.post( '/api/songs/create', async ( req: Request, res: Response ) => {
+  const { book, name, number, ccli } = req.body || {};
+
+  if ( !name || typeof name !== 'string' || !name.trim() ) {
+    res.status( 400 ).json({ error: 'Song name is required' });
+    return;
+  }
+  if ( !book || typeof book !== 'string' || !book.trim() ) {
+    res.status( 400 ).json({ error: 'Book is required' });
+    return;
+  }
+
+  const songName = name.trim();
+  const bookName = book.trim();
+  const songNumber = number ? String( number ).trim() : '';
+  const ext = '.' + ( config.ext || 'pptx' );
+
+  // Build filename
+  const filename = songNumber
+    ? `${ songNumber } - ${ songName }${ ext }`
+    : `${ songName }${ ext }`;
+
+  const bookDir = path.join( config.songsDirectory, bookName );
+  const targetPath = path.join( bookDir, filename );
+
+  // Resolve template path
+  const templatePath = path.join( config.songsDirectory, config.songTemplate );
+  try {
+    await fs.promises.access( templatePath );
+  } catch {
+    res.status( 500 ).json({ error: `Song template not found: ${ config.songTemplate }` });
+    return;
+  }
+
+  // Check target doesn't already exist
+  try {
+    await fs.promises.access( targetPath );
+    res.status( 409 ).json({ error: `File already exists: ${ filename }` });
+    return;
+  } catch {
+    // Good — file doesn't exist
+  }
+
+  try {
+    // Ensure book directory exists
+    await fs.promises.mkdir( bookDir, { recursive: true } );
+
+    // Copy template to target
+    await fs.promises.copyFile( templatePath, targetPath );
+
+    // Register in MySQL songs table
+    try {
+      const relPath = path.join( bookName, filename );
+      await findOrCreateSong( songName, songNumber || undefined, bookName, relPath );
+    } catch {
+      // DB not available — file was created on disk, which is the primary goal
+    }
+
+    res.json({
+      success: true,
+      song: { name: songName, number: songNumber || undefined, book: bookName, ccli: ccli || undefined },
+    });
+  } catch ( err: any ) {
+    console.error( '[SONGS] Error creating song:', err );
+    res.status( 500 ).json({ error: 'Failed to create song file' });
+  }
 });
 
 
@@ -1657,71 +1905,69 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
 
       if ( !weekFolder ) continue;
 
-      const songs: ( null | { number?: string; name: string } )[] = [ null, null, null ];
+      const songs: ( null | { number?: string; name: string; shortcut?: string } )[] = [ null, null, null ];
       let choruses: any[] = [];
 
       // Find song shortcuts: song 1, song 2, song 3
       const files = await fs.promises.readdir( weekFolder );
+
+      // --- Parse songs and choruses, collecting shortcut resolution promises ---
+      type PendingResolve = { promise: Promise<string>; apply: ( target: string ) => void };
+      const pending: PendingResolve[] = [];
+
       for ( let i = 1; i <= 3; i++ ) {
-        // Regex: song <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
-        // Examples:
-        //   song 1 203 - Tell Me the Story of Jesus - Shortcut.lnk
-        //   song 2 203 Tell Me the Story of Jesus.lnk
-        //   song 3 Tell Me the Story of Jesus - Shortcut.lnk
-        //   song 1 203- Tell Me the Story of Jesus.lnk
-        //   song 1 203 -Tell Me the Story of Jesus.lnk
-        //   song 1 Tell Me the Story.lnk
         const shortcut = files.find( ( f: string ) => f.toLowerCase().startsWith( `song ${ i } ` ) && f.toLowerCase().endsWith( '.lnk' ) );
         if ( shortcut ) {
           const re = /^song\s+(?<slot>\d+)\s+(?:(?<number>\d{3})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
           const match = shortcut.match( re );
+          let songObj: { number?: string; name: string; shortcut?: string };
           if ( match && match.groups ) {
             let name = match.groups.name.trim();
-            // Remove any trailing file extension or ' - Shortcut' if present (shouldn't be, but just in case)
             name = name.replace( /\.[a-zA-Z0-9]{2,5}$/i, '' ).replace( / - Shortcut$/i, '' ).trim();
-            if ( match.groups.number ) {
-              songs[ i - 1 ] = { number: match.groups.number, name };
-            } else {
-              songs[ i - 1 ] = { name };
-            }
+            songObj = match.groups.number
+              ? { number: match.groups.number, name, shortcut: '' }
+              : { name, shortcut: '' };
           } else {
-            // fallback: just use the rest of the name
             let rest = shortcut.replace( /^song \d+ /i, '' ).replace( /\.lnk$/i, '' );
             rest = rest.replace( / - Shortcut$/i, '' ).trim();
-            songs[ i - 1 ] = { name: rest };
+            songObj = { name: rest, shortcut: '' };
           }
+          songs[ i - 1 ] = songObj;
+          pending.push({
+            promise: getRelativeTarget( path.join( weekFolder, shortcut ), shortcut ),
+            apply: ( target ) => { songObj.shortcut = target; },
+          });
         }
       }
+
       // --- CHORUS SHORTCUTS ---
-      // Detect chorus shortcuts: chorus 1, chorus 2, etc.
-      for ( let c = 1; c <= 10; c++ ) { // support up to 10 choruses per week
+      for ( let c = 1; c <= 10; c++ ) {
         const chorusShortcut = files.find( ( f: string ) => f.toLowerCase().startsWith( `chorus ${ c } ` ) && f.toLowerCase().endsWith( '.lnk' ) );
         if ( chorusShortcut ) {
-          // Regex: chorus <slot> <number?> <name> [ - Shortcut].lnk (case-insensitive)
-          // Examples:
-          //   chorus 1 10,000 Reasons.pptx - Shortcut.lnk
-          //   chorus 2 123 - Name.lnk
-          //   chorus 3 Name - Shortcut.lnk
-          //   chorus 1 123- Name.lnk
-          //   chorus 1 123 -Name.lnk
-          //   chorus 1 Name.lnk
           const re = /^chorus\s+(?<slot>\d+)\s+(?:(?<number>\d{1,5})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
           const match = chorusShortcut.match( re );
+          let chorusObj: any;
           if ( match && match.groups ) {
             let name = match.groups.name.trim();
-            // Remove any trailing file extension or ' - Shortcut' if present
             name = name.replace( /\.[a-zA-Z0-9]{2,5}$/i, '' ).replace( / - Shortcut$/i, '' ).trim();
-            let chorusObj: any = { name };
+            chorusObj = { name, shortcut: '' };
             if ( match.groups.number ) chorusObj.number = match.groups.number;
-            choruses.push( chorusObj );
           } else {
-            // fallback: just use the rest of the name
             let rest = chorusShortcut.replace( /^chorus \d+ /i, '' ).replace( /\.lnk$/i, '' );
             rest = rest.replace( / - Shortcut$/i, '' ).trim();
-            choruses.push({ name: rest });
+            chorusObj = { name: rest, shortcut: '' };
           }
+          choruses.push( chorusObj );
+          pending.push({
+            promise: getRelativeTarget( path.join( weekFolder, chorusShortcut ), chorusShortcut ),
+            apply: ( target ) => { chorusObj.shortcut = target; },
+          });
         }
       }
+
+      // Resolve all shortcut targets in parallel
+      const targets = await Promise.all( pending.map( p => p.promise ) );
+      targets.forEach( ( target, idx ) => pending[ idx ].apply( target ) );
       // Try to load choruses.json if present
       const chorusJson = path.join( weekFolder, 'choruses.json' );
       if ( fs.existsSync( chorusJson ) ) {
@@ -2008,6 +2254,24 @@ setupExpressEndpoints();
   try {
     await initDb();
     console.log( '[DB] Database initialized successfully' );
+
+    // Seed books table from filesystem directories
+    try {
+      const pool = getPool();
+      const entries = await fs.promises.readdir( config.songsDirectory, { withFileTypes: true } );
+      const dirs = entries.filter( e => e.isDirectory() ).map( e => e.name );
+      for ( const dir of dirs ) {
+        await pool.query(
+          'INSERT IGNORE INTO books (name) VALUES (?)',
+          [ dir ]
+        );
+      }
+      if ( dirs.length > 0 ) {
+        console.log( `[DB] Seeded ${ dirs.length } books from songs directory` );
+      }
+    } catch ( err ) {
+      console.warn( '[DB] Could not seed books table:', err );
+    }
   } catch ( err ) {
     console.error( '[DB] Failed to initialize database:', err );
     console.warn( '[DB] Server will continue without job system. Set MYSQL_* env vars to enable.' );

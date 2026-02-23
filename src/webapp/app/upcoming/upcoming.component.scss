@@ -65,6 +65,13 @@
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 8px;
 
+  // Normalize Angular Material card content padding to match card-top
+  ::ng-deep .mat-mdc-card-content {
+    padding: 0 8px 8px;
+    position: relative;
+    z-index: 1;
+  }
+
   mat-card-header {
     display: flex;
     align-items: flex-start;
@@ -118,6 +125,20 @@
       }
     }
 
+    .youtube-link {
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+
+      .status-icon.ready {
+        color: #ff0000;
+      }
+
+      &:hover .status-icon.ready {
+        color: #cc0000;
+      }
+    }
+
     .approve-button {
       width: 28px;
       height: 28px;
@@ -132,6 +153,86 @@
         color: #4caf50;
       }
     }
+
+    .card-menu-button {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+
+      .status-icon {
+        opacity: 0.6;
+        cursor: pointer;
+      }
+
+      &:hover .status-icon {
+        opacity: 1;
+      }
+    }
+  }
+
+  // Past/locked card state
+  &.past {
+    opacity: 0.85;
+
+    .card-top .chorus-button,
+    .song-button {
+      pointer-events: none;
+      border-color: transparent !important;
+
+      // Override Angular Material disabled text graying
+      &[disabled],
+      &.mat-mdc-button-disabled {
+        color: #6ea8fe;
+
+        ::ng-deep .mdc-button__label {
+          color: #6ea8fe;
+        }
+      }
+    }
+
+    .card-top .add-chorus-button {
+      display: none;
+    }
+  }
+}
+
+// Presentation info at bottom of card
+.card-pre-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid rgba( 255, 255, 255, 0.08 );
+  color: #6c757d;
+  font-size: 0.75rem;
+
+  .pre-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #adb5bd;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+
+    mat-icon {
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+  }
+
+  .pre-detail {
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 }
 
@@ -315,19 +416,12 @@
 }
 
 .chorus-button {
-  width: 100%;
+  flex: 1;
   text-align: left;
   justify-content: flex-start;
   font-size: 0.85rem;
   color: #6ea8fe;
   border-color: #495057;
-
-  .chorus-index {
-    font-size: 0.75rem;
-    color: #6c757d;
-    margin-right: 4px;
-    flex-shrink: 0;
-  }
 }
 
 .add-chorus-button {
@@ -351,6 +445,35 @@
     height: 14px;
     margin-right: 2px;
   }
+}
+
+// Skeleton loading bars for song slots
+.skeleton-bar {
+  flex: 1;
+  height: 36px;
+  border-radius: 4px;
+  background: #3a3f44;
+  overflow: hidden;
+  position: relative;
+
+  .skeleton-shimmer {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba( 255, 255, 255, 0.04 ) 40%,
+      rgba( 255, 255, 255, 0.08 ) 50%,
+      rgba( 255, 255, 255, 0.04 ) 60%,
+      transparent 100%
+    );
+    animation: shimmer 1.5s infinite;
+  }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX( -100% ); }
+  100% { transform: translateX( 100% ); }
 }
 
 .empty-state {

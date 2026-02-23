@@ -10,6 +10,8 @@ import { MatSortModule, Sort } from '@angular/material/sort';
 import { MatSelectModule } from '@angular/material/select';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { CreateSongDialogComponent } from './create-song-dialog.component';
 
 
 /**
@@ -20,6 +22,9 @@ interface Song {
   number?: string;
   book?: string;
   lastModified?: string;
+  ccli?: string;
+  lastUsed?: string;
+  totalUsed?: number;
 }
 
 
@@ -40,6 +45,7 @@ interface Song {
     MatSelectModule,
     MatButtonModule,
     MatProgressSpinnerModule,
+    MatDialogModule,
   ],
   templateUrl: './library.component.html',
   styleUrls: [ './library.component.scss' ]
@@ -53,21 +59,34 @@ export class LibraryComponent implements OnInit {
   selectedBook = '';
   loading = true;
 
-  displayedColumns = [ 'number', 'name', 'book' ];
+  displayedColumns = [ 'number', 'name', 'book', 'ccli', 'lastUsed', 'totalUsed' ];
 
 
-  constructor( private http: HttpClient ) {}
+  constructor(
+    private http: HttpClient,
+    private dialog: MatDialog
+  ) {}
 
 
   /**
    * Load all songs on init.
    */
   ngOnInit(): void {
+    this.loadSongs();
+  }
+
+
+  /**
+   * Fetch the song list from the server.
+   */
+  private loadSongs(): void {
+    this.loading = true;
     this.http.get<Song[]>( '/api/songs' ).subscribe({
       next: ( data ) => {
         this.songs = data.sort( ( a, b ) => a.name.localeCompare( b.name ) );
         this.filteredSongs = this.songs;
         this.buildBookList();
+        this.filterSongs();
         this.loading = false;
       },
       error: () => { this.loading = false; },
@@ -129,7 +148,41 @@ export class LibraryComponent implements OnInit {
         case 'number': return compare( a.number || '', b.number || '', isAsc );
         case 'name': return compare( a.name, b.name, isAsc );
         case 'book': return compare( a.book || '', b.book || '', isAsc );
+        case 'ccli': return compare( a.ccli || '', b.ccli || '', isAsc );
+        case 'lastUsed': return compare( a.lastUsed || '', b.lastUsed || '', isAsc );
+        case 'totalUsed': return compareNum( a.totalUsed || 0, b.totalUsed || 0, isAsc );
         default: return 0;
+      }
+    });
+  }
+
+
+  /**
+   * Format a YYYYMMDD string into a short readable date.
+   *
+   * @param dateStr - YYYYMMDD format or undefined
+   * @returns formatted date like "Feb 2, 2026" or empty string
+   */
+  formatDate( dateStr?: string ): string {
+    if ( !dateStr || dateStr.length < 8 ) return '';
+    const y = parseInt( dateStr.slice( 0, 4 ) );
+    const m = parseInt( dateStr.slice( 4, 6 ) ) - 1;
+    const d = parseInt( dateStr.slice( 6, 8 ) );
+    return new Date( y, m, d ).toLocaleDateString( 'en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+
+  /**
+   * Open the create song dialog and reload songs on success.
+   */
+  openCreateDialog(): void {
+    const dialogRef = this.dialog.open( CreateSongDialogComponent, {
+      width: '550px',
+    });
+
+    dialogRef.afterClosed().subscribe( ( result ) => {
+      if ( result ) {
+        this.loadSongs();
       }
     });
   }
@@ -137,7 +190,7 @@ export class LibraryComponent implements OnInit {
 
 
 /**
- * Compare two values for sorting.
+ * Compare two string values for sorting.
  *
  * @param a - first value
  * @param b - second value
@@ -146,4 +199,17 @@ export class LibraryComponent implements OnInit {
  */
 function compare( a: string, b: string, isAsc: boolean ): number {
   return ( a < b ? -1 : 1 ) * ( isAsc ? 1 : -1 );
+}
+
+
+/**
+ * Compare two numeric values for sorting.
+ *
+ * @param a - first value
+ * @param b - second value
+ * @param isAsc - ascending order
+ * @returns comparison result
+ */
+function compareNum( a: number, b: number, isAsc: boolean ): number {
+  return ( a - b ) * ( isAsc ? 1 : -1 );
 }

@@ -11,14 +11,16 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialogModule, MatDialog } from '@angular/material/dialog';
 import { MatDividerModule } from '@angular/material/divider';
+import { MatMenuModule } from '@angular/material/menu';
 import { FormsModule } from '@angular/forms';
-import { Subject, takeUntil } from 'rxjs';
+import { Subject, takeUntil, debounceTime } from 'rxjs';
 import { SocketService } from '../../socket.service';
 import { SongSelectDialogComponent } from './song-select-dialog.component';
 import { NotesDialogComponent } from '../shared/notes-dialog.component';
 import { VerseDialogComponent, VerseDialogData, VerseDialogResult } from './verse-dialog.component';
 import { ConfirmDialogComponent } from '../admin/confirm-dialog.component';
 import { ChorusEditDialogComponent, ChorusEditDialogResult } from './chorus-edit-dialog.component';
+import { YoutubeDialogComponent, YoutubeDialogData } from './youtube-dialog.component';
 
 
 /**
@@ -27,6 +29,7 @@ import { ChorusEditDialogComponent, ChorusEditDialogResult } from './chorus-edit
 interface Song {
   name: string;
   number?: string;
+  shortcut?: string;
 }
 
 
@@ -46,7 +49,12 @@ interface FolderInfo {
   name: string;
   hasPre: boolean;
   isApproved: boolean;
+  presentationName: string | null;
+  presentationSize: string | null;
+  presentationModified: string | null;
   hasMp4: boolean;
+  videoFileName: string | null;
+  youtubeUrl: string | null;
   thumbnail: string | null;
   hasSong1: boolean;
   hasSong2: boolean;
@@ -75,6 +83,7 @@ interface FolderInfo {
     MatTooltipModule,
     MatDialogModule,
     MatDividerModule,
+    MatMenuModule,
   ],
   templateUrl: './upcoming.component.html',
   styleUrls: [ './upcoming.component.scss' ]
@@ -91,13 +100,19 @@ export class UpcomingComponent implements OnInit, OnDestroy {
 
   weeks: { date: string; label: string; selection: WeekSelection | null; folder: FolderInfo | null }[] = [];
   folders: FolderInfo[] = [];
+  /** True while the initial data fetch for the current month hasn't completed yet. */
+  loading = true;
 
   verseReference = '';
   verseText = '';
   closingSong: Song | null = null;
   templateInfo: { name: string; lastModified: string; size: string } | null = null;
 
+  /** Set of week dates (YYYYMMDD) that the user has unlocked for editing despite being past. */
+  editingPastWeeks = new Set<string>();
+
   private destroy$ = new Subject<void>();
+  private reload$ = new Subject<void>();
 
 
   constructor(
@@ -121,11 +136,17 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    * Load data on init and subscribe to real-time folder changes.
    */
   ngOnInit(): void {
+    // Debounce reload requests so rapid socket events don't spam the server
+    this.reload$.pipe( debounceTime( 500 ), takeUntil( this.destroy$ ) )
+      .subscribe( () => this.doLoadMonth() );
+
     this.loadMonth();
     this.loadTemplateInfo();
 
-    this.socketService.on( 'folder-changes' ).pipe( takeUntil( this.destroy$ ) )
-      .subscribe( () => this.loadMonth() );
+    this.socketService.on( 'folder-changes' ).pipe(
+      debounceTime( 2000 ),
+      takeUntil( this.destroy$ ),
+    ).subscribe( () => this.loadMonth() );
   }
 
 
@@ -139,58 +160,53 @@ export class UpcomingComponent implements OnInit, OnDestroy {
 
 
   /**
-   * Load song selections and folders for the selected month.
+   * Queue a debounced reload of month data.
    */
   loadMonth(): void {
+    this.reload$.next();
+  }
+
+
+  /**
+   * Load song selections and folders for the selected month.
+   * Immediately builds skeleton weeks from date math, then fills in data as responses arrive.
+   */
+  private doLoadMonth(): void {
+    this.editingPastWeeks.clear();
+    this.loading = true;
+
+    // Immediately build skeleton weeks so cards render right away
+    const sundays = this.computeSundays();
+    this.weeks = sundays.map( date => ({
+      date,
+      label: this.formatDateLabel( date ),
+      selection: null,
+      folder: this.findFolder( date ),
+    }));
+
     this.loadVerse();
     this.loadClosingSong();
 
-    // Load week selections
+    // Load week selections — merge into existing skeleton weeks
     this.http.get<Record<string, WeekSelection>>(
       `/api/week-song-selections?year=${ this.selectedYear }&month=${ this.selectedMonth }`
     ).subscribe({
       next: ( data ) => {
-        // Build weeks array from response keys
         const weekIndices = Object.keys( data ).map( Number ).sort();
-        this.weeks = weekIndices.map( idx => {
-          const sel = data[ String( idx ) ];
-          // Derive the date label from the selection context
-          return {
-            date: this.getSundayDate( idx ),
-            label: this.formatSundayLabel( idx ),
-            selection: sel,
-            folder: this.findFolder( this.getSundayDate( idx ) ),
-          };
-        });
-
-        // If no weeks returned, compute Sundays anyway
-        if ( this.weeks.length === 0 ) {
-          const sundays = this.computeSundays();
-          this.weeks = sundays.map( ( date, idx ) => ({
-            date,
-            label: this.formatDateLabel( date ),
-            selection: null,
-            folder: this.findFolder( date ),
-          }));
+        for ( const idx of weekIndices ) {
+          if ( this.weeks[ idx ] ) {
+            this.weeks[ idx ].selection = data[ String( idx ) ];
+          }
         }
+        this.loading = false;
       },
-      error: () => {
-        // Fallback: compute Sundays from date math
-        const sundays = this.computeSundays();
-        this.weeks = sundays.map( ( date, idx ) => ({
-          date,
-          label: this.formatDateLabel( date ),
-          selection: null,
-          folder: this.findFolder( date ),
-        }));
-      },
+      error: () => { this.loading = false; },
     });
 
-    // Load folders for thumbnails and status
+    // Load folders for thumbnails and status — merge into existing skeleton weeks
     this.http.get<FolderInfo[]>( '/api/folders' ).subscribe({
       next: ( data ) => {
         this.folders = data;
-        // Re-associate folders with weeks
         this.weeks.forEach( w => {
           w.folder = this.findFolder( w.date );
         });
@@ -211,7 +227,7 @@ export class UpcomingComponent implements OnInit, OnDestroy {
     const currentSong = week.selection?.songs?.[ slot - 1 ] || null;
 
     const dialogRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '600px',
+      width: '900px',
       maxHeight: '80vh',
       data: { currentSong, slot },
     });
@@ -407,7 +423,7 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    */
   addChorus( weekIdx: number ): void {
     const dialogRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '600px',
+      width: '900px',
       maxHeight: '80vh',
       data: { currentSong: null, slot: 'chorus' },
     });
@@ -442,7 +458,7 @@ export class UpcomingComponent implements OnInit, OnDestroy {
     if ( !week.date ) return;
 
     const dialogRef = this.dialog.open( NotesDialogComponent, {
-      width: '600px',
+      width: '900px',
       data: { folderName: week.date },
     });
 
@@ -526,7 +542,7 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    */
   selectClosingSong(): void {
     const dialogRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '600px',
+      width: '900px',
       maxHeight: '80vh',
       data: { currentSong: this.closingSong, slot: 'closing' },
     });
@@ -558,6 +574,29 @@ export class UpcomingComponent implements OnInit, OnDestroy {
       next: () => this.loadMonth(),
       error: ( err ) => console.error( 'Failed to approve presentation:', err ),
     });
+  }
+
+
+  /**
+   * Open the YouTube URL dialog for a week.
+   *
+   * @param week - the week to set the YouTube URL for
+   */
+  openYoutubeDialog( week: { date: string; folder: FolderInfo | null } ): void {
+    const ref = this.dialog.open( YoutubeDialogComponent, {
+      data: {
+        folder: week.date,
+        date: week.date,
+        currentUrl: week.folder?.youtubeUrl || null,
+      } as YoutubeDialogData,
+      width: '480px',
+    } );
+
+    ref.afterClosed().subscribe( ( result: { url: string | null } | undefined ) => {
+      if ( result !== undefined ) {
+        this.loadMonth();
+      }
+    } );
   }
 
 
@@ -625,6 +664,54 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    */
   get anyHasPre(): boolean {
     return this.weeks.some( w => w.folder?.hasPre );
+  }
+
+
+  /**
+   * True when the selected month is entirely in the past (last day of month < today).
+   */
+  get isPreviousMonth(): boolean {
+    const now = new Date();
+    const lastDay = new Date( this.selectedYear, this.selectedMonth, 0 );
+    const today = new Date( now.getFullYear(), now.getMonth(), now.getDate() );
+    return lastDay < today;
+  }
+
+
+  /**
+   * Whether a week card is locked (past and not being edited).
+   *
+   * @param week - the week object
+   * @returns true if the card should be in read-only mode
+   */
+  isWeekLocked( week: { date: string } ): boolean {
+    return this.isPastSunday( week.date ) && !this.editingPastWeeks.has( week.date );
+  }
+
+
+  /**
+   * Toggle edit mode for a past week.
+   *
+   * @param week - the week to toggle
+   */
+  toggleEditPastWeek( week: { date: string } ): void {
+    if ( this.editingPastWeeks.has( week.date ) ) {
+      this.editingPastWeeks.delete( week.date );
+    } else {
+      this.editingPastWeeks.add( week.date );
+    }
+  }
+
+
+  /**
+   * TrackBy function for week cards to prevent unnecessary DOM recreation.
+   *
+   * @param index - array index
+   * @param week - week object
+   * @returns the week's date string as a stable identity
+   */
+  trackByDate( index: number, week: { date: string } ): string {
+    return week.date;
   }
 
 
