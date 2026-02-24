@@ -12,6 +12,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { CreateSongDialogComponent } from './create-song-dialog.component';
+import { SongDetailDialogComponent, SongDetailDialogData } from './song-detail-dialog.component';
 
 
 /**
@@ -149,7 +150,7 @@ export class LibraryComponent implements OnInit {
         case 'name': return compare( a.name, b.name, isAsc );
         case 'book': return compare( a.book || '', b.book || '', isAsc );
         case 'ccli': return compare( a.ccli || '', b.ccli || '', isAsc );
-        case 'lastUsed': return compare( a.lastUsed || '', b.lastUsed || '', isAsc );
+        case 'lastUsed': return compare( padDate( a.lastUsed ), padDate( b.lastUsed ), isAsc );
         case 'totalUsed': return compareNum( a.totalUsed || 0, b.totalUsed || 0, isAsc );
         default: return 0;
       }
@@ -158,15 +159,18 @@ export class LibraryComponent implements OnInit {
 
 
   /**
-   * Format a YYYYMMDD string into a short readable date.
+   * Format a YYYYMMDD or YYYYMM string into a short readable date.
    *
-   * @param dateStr - YYYYMMDD format or undefined
-   * @returns formatted date like "Feb 2, 2026" or empty string
+   * @param dateStr - YYYYMMDD or YYYYMM format, or undefined
+   * @returns formatted date like "Feb 2, 2026" or "Feb 2026", or empty string
    */
   formatDate( dateStr?: string ): string {
-    if ( !dateStr || dateStr.length < 8 ) return '';
+    if ( !dateStr || dateStr.length < 6 ) return '';
     const y = parseInt( dateStr.slice( 0, 4 ) );
     const m = parseInt( dateStr.slice( 4, 6 ) ) - 1;
+    if ( dateStr.length < 8 ) {
+      return new Date( y, m, 1 ).toLocaleDateString( 'en-US', { month: 'short', year: 'numeric' });
+    }
     const d = parseInt( dateStr.slice( 6, 8 ) );
     return new Date( y, m, d ).toLocaleDateString( 'en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
@@ -184,6 +188,27 @@ export class LibraryComponent implements OnInit {
       if ( result ) {
         this.loadSongs();
       }
+    });
+  }
+
+
+  /**
+   * Open the song detail dialog showing usage history.
+   *
+   * @param song - the song row that was clicked
+   */
+  openSongDetail( song: Song ): void {
+    this.dialog.open( SongDetailDialogComponent, {
+      width: '550px',
+      maxHeight: '80vh',
+      data: {
+        name: song.name,
+        number: song.number,
+        book: song.book,
+        ccli: song.ccli,
+        lastUsed: song.lastUsed,
+        totalUsed: song.totalUsed,
+      } as SongDetailDialogData,
     });
   }
 }
@@ -212,4 +237,17 @@ function compare( a: string, b: string, isAsc: boolean ): number {
  */
 function compareNum( a: number, b: number, isAsc: boolean ): number {
   return ( a - b ) * ( isAsc ? 1 : -1 );
+}
+
+
+/**
+ * Pad a YYYYMM date to YYYYMMDD for consistent sort ordering.
+ * Closing songs use YYYYMM; pad with "32" so they sort after all days in that month.
+ *
+ * @param dateStr - YYYYMMDD, YYYYMM, or undefined
+ * @returns padded date string or empty string
+ */
+function padDate( dateStr?: string ): string {
+  if ( !dateStr ) return '';
+  return dateStr.length < 8 ? dateStr + '32' : dateStr;
 }

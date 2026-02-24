@@ -7,7 +7,7 @@ import {
   CompleteJobRequest, FailJobRequest, JobLogEntry, JobListQuery, WorkerInfo
 } from '../types/job';
 
-const JOB_TYPES = [ 'video-alignment', 'transcription', 'claude-processing' ];
+const JOB_TYPES = [ 'video-alignment', 'transcription', 'claude-processing', 'transcode' ];
 const JOB_STATUSES = [ 'pending', 'queued', 'processing', 'completed', 'failed', 'cancelled' ];
 
 /** Stale threshold — workers not seen in this many ms are marked stale. */
@@ -601,6 +601,46 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
       // No auto-chain — user must manually edit + render the production MP4.
       // scanFolders() will detect the production MP4 and create a transcription job.
       console.log( `[JOBS] Video alignment complete for ${ job.sunday_date }. Kdenlive project should be generated.` );
+      break;
+    }
+
+    case 'transcode': {
+      // Transcode complete → production MP4 exists → create transcription job
+      const outputPath = job.output_path;
+      if ( !outputPath ) {
+        console.error( `[JOBS] Cannot chain transcription: no output_path for transcode job #${ job.id }` );
+        return;
+      }
+
+      const [ existingTranscription ] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM jobs WHERE type = 'transcription' AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
+        [ job.sunday_date ]
+      );
+
+      if ( existingTranscription.length > 0 ) {
+        console.log( `[JOBS] Transcription job already exists for ${ job.sunday_date }, skipping chain` );
+        return;
+      }
+
+      const vttOutput = outputPath.replace( /\.mp4$/i, '.vtt' );
+
+      const [ transcodeResult ] = await pool.query<ResultSetHeader>(
+        `INSERT INTO jobs (type, status, priority, sunday_date, input_path, output_path, metadata, parent_job_id)
+         VALUES ('transcription', 'pending', ?, ?, ?, ?, ?, ?)`,
+        [
+          job.priority,
+          job.sunday_date,
+          outputPath,
+          vttOutput,
+          JSON.stringify({ whisper_model: 'large-v3', language: 'en' }),
+          job.id,
+        ]
+      );
+
+      const [ transcodeRows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ transcodeResult.insertId ] );
+      const chainedJob = parseJobRow( transcodeRows[ 0 ] );
+      io.emit( 'job:created', chainedJob );
+      console.log( `[JOBS] Chained transcription job #${ chainedJob.id } from transcode job #${ job.id }` );
       break;
     }
 

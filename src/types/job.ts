@@ -1,4 +1,4 @@
-export type JobType = 'video-alignment' | 'transcription' | 'claude-processing';
+export type JobType = 'video-alignment' | 'transcription' | 'claude-processing' | 'transcode';
 export type JobStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 

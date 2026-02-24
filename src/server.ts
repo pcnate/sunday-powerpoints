@@ -89,9 +89,7 @@ class FolderCache {
  * @property {boolean} presentation - true if a PowerPoint file with the configured extension exists
  * @property {string|null} thumbnail - Path to thumbnail image, or null if not found
  * @property {Video[]} video - Array of video files in the folder
- * @property {Song|null} song1 - Song 1 shortcut, or null if not set
- * @property {Song|null} song2 - Song 2 shortcut, or null if not set
- * @property {Song|null} song3 - Song 3 shortcut, or null if not set
+ * @property {Record<string, Song|null>} songs - Song shortcuts keyed by slot ID (e.g., "1", "2a", "2b", "3")
  * @property {Chorus[]} choruses - Array of chorus shortcuts in the folder
  * @property {string|null} hasNotes - path to notes file if it exists, or null if not found
  */
@@ -101,9 +99,7 @@ class SundayFolder {
   presentation: string | null; // path to PowerPoint file if it exists, or null if not found
   thumbnail: string | null; // path to thumbnail image, or null if not found
   video: Video[]; // video files
-  song1: Song | null;
-  song2: Song | null;
-  song3: Song | null;
+  songs: Record<string, Song | null>;
   choruses: Chorus[];
   hasNotes: string | null;
 
@@ -122,9 +118,7 @@ class SundayFolder {
     this.presentation = null;
     this.thumbnail = null;
     this.video = [];
-    this.song1 = null;
-    this.song2 = null;
-    this.song3 = null;
+    this.songs = { '1': null, '2': null, '3': null };
     this.choruses = [];
     this.hasNotes = null;
 
@@ -167,21 +161,15 @@ class SundayFolder {
 
 
   /**
-   * Set a song for the given number
-   * 
-   * @param _num '1 | 2 | 3' - song number to set (1, 2, or 3)
+   * Set a song for the given slot ID.
+   *
+   * @param slotId - slot identifier (e.g., "1", "2", "2a", "2b", "3")
    * @param _target - absolute path to the target song file
    */
-  async setSong( _num: 1 | 2 | 3, _target: fs.PathLike ) {
-    if ( _num === 1 && !!this.song1 ) await this.song1.delete();
-    if ( _num === 2 && !!this.song2 ) await this.song2.delete();
-    if ( _num === 3 && !!this.song3 ) await this.song3.delete();
-
-    const song = new Song( `song ${ _num }`, _target );
-
-    if ( _num === 1 ) this.song1 = song;
-    else if ( _num === 2 ) this.song2 = song;
-    else if ( _num === 3 ) this.song3 = song;
+  async setSong( slotId: string, _target: fs.PathLike ) {
+    if ( this.songs[ slotId ] ) await this.songs[ slotId ]!.delete();
+    const song = new Song( `song ${ slotId }`, _target );
+    this.songs[ slotId ] = song;
   }
 
 
@@ -235,8 +223,8 @@ class SundayFolder {
         }
 
         // Check for notes file
-        if ( /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i.test( file ) ) {
-          if ( this.hasNotes === filePath ) {
+        if ( /^(\d{4}-?\d{2}-?\d{2}[\s-]?)?notes\.txt$/i.test( file ) ) {
+          if ( this.hasNotes !== filePath ) {
             this.hasNotes = filePath;
             changes = true;
           }
@@ -245,30 +233,17 @@ class SundayFolder {
 
         // Check for song shortcuts and get the target file
         if ( file.toLowerCase().startsWith( 'song ' ) ) {
-          const songMatch = file.match( /^song (\d+) /i );
+          const songMatch = file.match( /^song (\d+)([a-z])? /i );
           if ( !songMatch ) continue; // not a song shortcut
 
-          const songNumber = parseInt( songMatch[ 1 ] );
+          const slotId = songMatch[ 2 ] ? `${ songMatch[ 1 ] }${ songMatch[ 2 ].toLowerCase() }` : songMatch[ 1 ];
           const target = await getShortcutTarget( filePath );
-          const song = new Song( `song ${ songNumber }`, target || '', false );
+          const song = new Song( `song ${ slotId }`, target || '', false );
 
-          if ( songNumber === 1 ) {
-            // check if song1 is different than song
-            if ( this.song1 && this.song1.target === song.target ) continue; // already exists
-            this.song1 = song;
-            changes = true;
-            continue;
-          } else if ( songNumber === 2 ) {
-            if ( this.song2 && this.song2.target === song.target ) continue; // already exists
-            this.song2 = song;
-            changes = true;
-            continue;
-          } else if ( songNumber === 3 ) {
-            if ( this.song3 && this.song3.target === song.target ) continue; // already exists
-            this.song3 = song;
-            changes = true;
-            continue;
-          }
+          if ( this.songs[ slotId ] && this.songs[ slotId ]!.target === song.target ) continue; // already exists
+          this.songs[ slotId ] = song;
+          changes = true;
+          continue;
         }
 
         // Check for chorus shortcuts
@@ -341,9 +316,12 @@ class SundayFolder {
       thumbnail: this.thumbnail,
       video: this.video.map( v => v.toJSON() ),
       choruses: this.choruses.map( c => c.toJSON() ),
-      song1: this.song1 ? this.song1.toJSON() : null,
-      song2: this.song2 ? this.song2.toJSON() : null,
-      song3: this.song3 ? this.song3.toJSON() : null,
+      songs: Object.fromEntries(
+        Object.entries( this.songs ).map( ([ k, v ]) => [ k, v ? v.toJSON() : null ] )
+      ),
+      song1: this.songs[ '1' ] ? this.songs[ '1' ]!.toJSON() : null,
+      song2: this.songs[ '2' ] ? this.songs[ '2' ]!.toJSON() : null,
+      song3: this.songs[ '3' ] ? this.songs[ '3' ]!.toJSON() : null,
       hasNotes: this.hasNotes,
       archived: this.archived,
       backlog: this.backlog
@@ -776,6 +754,36 @@ app.use( '/api', ( req, res, next ) => {
 app.use( '/api/jobs', createJobRoutes( io ) );
 
 /**
+ * Resolve a YYYYMMDD folder name to its absolute path on disk.
+ *
+ * Checks three possible locations (in order):
+ *   1. OUTPUT_DIRECTORY/YYYYMMDD          (current / upcoming)
+ *   2. OUTPUT_DIRECTORY/YYYY/YYYYMMDD     (archived)
+ *   3. OUTPUT_DIRECTORY/YYYY Backlog/YYYYMMDD  (backlog)
+ *
+ * @param folderName - YYYYMMDD string
+ * @returns absolute folder path, or null if not found
+ */
+async function resolveFolderPath( folderName: string ): Promise<string | null> {
+  const year = folderName.slice( 0, 4 );
+  const candidates = [
+    path.join( config.outputDirectory, folderName ),
+    path.join( config.outputDirectory, year, folderName ),
+    path.join( config.outputDirectory, `${ year } Backlog`, folderName ),
+  ];
+
+  for ( const candidate of candidates ) {
+    try {
+      const stat = await fs.promises.stat( candidate );
+      if ( stat.isDirectory() ) return candidate;
+    } catch {}
+  }
+
+  return null;
+}
+
+
+/**
  * API endpoint to list folders in outputDirectory
  */
 /**
@@ -784,9 +792,10 @@ app.use( '/api/jobs', createJobRoutes( io ) );
  * @param folderPath - absolute path to the folder
  * @param folderName - the YYYYMMDD folder name
  * @param backlog - whether this folder is in a backlog directory
+ * @param archived - whether this folder is in an archived YYYY directory
  * @returns folder metadata object
  */
-async function scanFolderMetadata( folderPath: string, folderName: string, backlog: boolean ) {
+async function scanFolderMetadata( folderPath: string, folderName: string, backlog: boolean, archived: boolean ) {
   let hasPre = false;
   let isApproved = false;
   let presentationName: string | null = null;
@@ -822,13 +831,16 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
 
   const vidsPath = path.join( folderPath, 'Vids' );
   let hasMp4 = false;
+  let hasMkv = false;
   let thumbnail = null;
   let videoFileName = null;
   let hasProduction = false;
   let hasTranscription = false;
+  let hasKdenlive = false;
   try {
     const vidsFiles = await fs.promises.readdir( vidsPath );
     hasMp4 = vidsFiles.some( f => f.toLowerCase().endsWith( '.mp4' ) );
+    hasMkv = vidsFiles.some( f => f.toLowerCase().endsWith( '.mkv' ) );
     if ( hasMp4 ) {
       const mp4File = vidsFiles.find( f => f.toLowerCase().endsWith( '.mp4' ) );
       videoFileName = mp4File ? toRelativePath( path.join( vidsPath, mp4File ) ) : null;
@@ -837,19 +849,27 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     if ( thumbFile ) {
       thumbnail = `/api/thumbnail/${ encodeURIComponent( folderName ) }`;
     }
-    // Pipeline: check for production MP4 and transcription VTT in Vids/
+    // Pipeline: check for production MP4, transcription VTT, and Kdenlive project in Vids/
     hasProduction = vidsFiles.some( f => /^\d{8}-production\.mp4$/i.test( f ) );
     hasTranscription = vidsFiles.some( f => f.toLowerCase().endsWith( '.vtt' ) );
+    hasKdenlive = vidsFiles.some( f => f.toLowerCase().endsWith( '.kdenlive' ) );
   } catch {}
 
+  const hasVideo = hasMp4 || hasMkv;
+
   let hasSong1 = false, hasSong2 = false, hasSong3 = false;
-  let hasKdenlive = false;
   let hasSermonMd = false;
+  const songSlots: string[] = [];
   files.forEach( f => {
     const lower = f.toLowerCase();
-    if ( lower.startsWith( 'song 1 ' ) ) hasSong1 = true;
-    if ( lower.startsWith( 'song 2 ' ) ) hasSong2 = true;
-    if ( lower.startsWith( 'song 3 ' ) ) hasSong3 = true;
+    const songMatch = lower.match( /^song (\d+)([a-z])? / );
+    if ( songMatch ) {
+      const slotId = songMatch[ 2 ] ? `${ songMatch[ 1 ] }${ songMatch[ 2 ] }` : songMatch[ 1 ];
+      if ( !songSlots.includes( slotId ) ) songSlots.push( slotId );
+      if ( songMatch[ 1 ] === '1' ) hasSong1 = true;
+      if ( songMatch[ 1 ] === '2' ) hasSong2 = true;
+      if ( songMatch[ 1 ] === '3' ) hasSong3 = true;
+    }
     if ( lower.endsWith( '.kdenlive' ) ) hasKdenlive = true;
     if ( /^\d{8}-sermon\.md$/i.test( f ) ) hasSermonMd = true;
   });
@@ -864,18 +884,25 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     presentationSize,
     presentationModified,
     hasMp4,
+    hasMkv,
+    hasVideo,
     thumbnail,
     videoFileName,
     hasSong1,
     hasSong2,
     hasSong3,
+    songSlots,
     hasNotes,
     hasKdenlive,
     hasProduction,
     hasTranscription,
     hasSermonMd,
     youtubeUrl: null as string | null,
+    sermonPptxFile: null as string | null,
+    sermonTitle: null as string | null,
+    sermonSpeaker: null as string | null,
     backlog,
+    archived,
     files,
   };
 }
@@ -890,8 +917,8 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
     return;
   }
 
-  // Collect top-level YYYYMMDD folders and backlog subfolders
-  const dateFolders: { name: string; fullPath: string; backlog: boolean }[] = [];
+  // Collect top-level YYYYMMDD folders, archived YYYY/ subfolders, and backlog subfolders
+  const dateFolders: { name: string; fullPath: string; backlog: boolean; archived: boolean }[] = [];
   const dateRegex = /^\d{8}$/;
 
   for ( const entry of entries ) {
@@ -902,7 +929,24 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
         name: entry.name,
         fullPath: path.join( config.outputDirectory, entry.name ),
         backlog: false,
+        archived: false,
       });
+    } else if ( /^\d{4}$/.test( entry.name ) ) {
+      // Archived year folder (e.g. "2025")
+      const yearPath = path.join( config.outputDirectory, entry.name );
+      try {
+        const subEntries = await fs.promises.readdir( yearPath, { withFileTypes: true } );
+        for ( const sub of subEntries ) {
+          if ( sub.isDirectory() && dateRegex.test( sub.name ) ) {
+            dateFolders.push({
+              name: sub.name,
+              fullPath: path.join( yearPath, sub.name ),
+              backlog: false,
+              archived: true,
+            });
+          }
+        }
+      } catch {}
     } else if ( /^\d{4}\s+backlog$/i.test( entry.name ) ) {
       const backlogPath = path.join( config.outputDirectory, entry.name );
       try {
@@ -913,6 +957,7 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
               name: sub.name,
               fullPath: path.join( backlogPath, sub.name ),
               backlog: true,
+              archived: false,
             });
           }
         }
@@ -923,7 +968,7 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
   dateFolders.sort( ( a, b ) => b.name.localeCompare( a.name ) );
 
   const folderData = await Promise.all(
-    dateFolders.map( f => scanFolderMetadata( f.fullPath, f.name, f.backlog ) )
+    dateFolders.map( f => scanFolderMetadata( f.fullPath, f.name, f.backlog, f.archived ) )
   );
 
   // Merge YouTube URLs from MySQL (if DB available)
@@ -942,6 +987,26 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
     // DB not available — youtubeUrl stays null
   }
 
+  // Merge sermon info from MySQL (if DB available)
+  try {
+    const pool = getPool();
+    const [ sermonRows ] = await pool.query<RowDataPacket[]>( 'SELECT sunday_date, pptx_file, title, speaker FROM sermon_info' );
+    const sermonMap = new Map<string, { pptxFile: string | null; title: string | null; speaker: string | null }>();
+    for ( const row of sermonRows ) {
+      sermonMap.set( row.sunday_date, { pptxFile: row.pptx_file, title: row.title, speaker: row.speaker } );
+    }
+    for ( const folder of folderData ) {
+      const info = sermonMap.get( folder.name );
+      if ( info ) {
+        folder.sermonPptxFile = info.pptxFile;
+        folder.sermonTitle = info.title;
+        folder.sermonSpeaker = info.speaker;
+      }
+    }
+  } catch {
+    // DB not available — sermon info stays null
+  }
+
   response.json( folderData );
 });
 
@@ -954,8 +1019,8 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
  * @returns the notes filename if found, or null
  */
 function hasNotesFile( folderName: string, files: string[] ): string | null {
-  // Match notes file: YYYYMMDD-notes.txt, YYYY-MM-DD-notes.txt, YYYYMMDD Notes.txt, YYYY-MM-DD Notes.txt (case-insensitive, flexible on dash/space)
-  const notesRegex = /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i;
+  // Match notes file: YYYYMMDD-notes.txt, YYYY-MM-DD-notes.txt, YYYYMMDD Notes.txt, Notes.txt (case-insensitive)
+  const notesRegex = /^(\d{4}-?\d{2}-?\d{2}[\s-]?)?notes\.txt$/i;
   return files.find( f => notesRegex.test( f ) ) || null;
 }
 
@@ -969,7 +1034,12 @@ app.get( '/api/thumbnail/:folder', async ( req: Request, res: Response ) => {
     res.status( 400 ).send( 'Missing folder' );
     return;
   }
-  const vidsPath = path.join( config.outputDirectory, folder, 'Vids' );
+  const folderPath = await resolveFolderPath( folder );
+  if ( !folderPath ) {
+    res.status( 404 ).send( 'Folder not found' );
+    return;
+  }
+  const vidsPath = path.join( folderPath, 'Vids' );
   let files: string[] = [];
   try {
     files = await fs.promises.readdir( vidsPath );
@@ -1151,7 +1221,8 @@ app.get( '/api/notes', ( req, res ) => {
   ( async () => {
     const folder = req.query.folder as string;
     if ( !folder ) return res.status( 400 ).send( 'Missing folder' );
-    const folderPath = path.join( config.outputDirectory, folder );
+    const folderPath = await resolveFolderPath( folder );
+    if ( !folderPath ) return res.status( 404 ).send( 'Folder not found' );
     let files: string[] = [];
     try {
       files = await fs.promises.readdir( folderPath );
@@ -1177,21 +1248,21 @@ app.get( '/api/notes', ( req, res ) => {
 app.post( '/api/notes', function( req: any, res: any ) {
   const folder = req.query.folder as string;
   if ( !folder ) return res.status( 400 ).send( 'Missing folder' );
-  const folderPath = path.join( config.outputDirectory, folder );
-  fs.promises.readdir( folderPath )
-    .then( files => {
-      const notesFile = files.find( f => /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i.test( f ) );
-      if ( !notesFile ) { res.status( 404 ).send( 'Notes file not found' ); return; }
-      const notesPath = path.join( folderPath, notesFile );
-      let body = '';
-      req.on( 'data', ( chunk: Buffer ) => { body += chunk.toString(); } );
-      req.on( 'end', () => {
-        fs.promises.writeFile( notesPath, body, 'utf8' )
-          .then( () => res.send( 'OK' ) )
-          .catch( () => res.status( 500 ).send( 'Could not save notes file' ) );
-      });
-    })
-    .catch( () => res.status( 404 ).send( 'Folder not found' ) );
+  ( async () => {
+    const folderPath = await resolveFolderPath( folder );
+    if ( !folderPath ) return res.status( 404 ).send( 'Folder not found' );
+    const files = await fs.promises.readdir( folderPath );
+    const notesFile = files.find( f => /^\d{4}-?\d{2}-?\d{2}(\s+)?notes\.txt$/i.test( f ) );
+    if ( !notesFile ) { res.status( 404 ).send( 'Notes file not found' ); return; }
+    const notesPath = path.join( folderPath, notesFile );
+    let body = '';
+    req.on( 'data', ( chunk: Buffer ) => { body += chunk.toString(); } );
+    req.on( 'end', () => {
+      fs.promises.writeFile( notesPath, body, 'utf8' )
+        .then( () => res.send( 'OK' ) )
+        .catch( () => res.status( 500 ).send( 'Could not save notes file' ) );
+    });
+  })().catch( () => res.status( 404 ).send( 'Folder not found' ) );
 });
 
 
@@ -1238,10 +1309,159 @@ app.put( '/api/youtube-url', async ( req: Request, res: Response ) => {
         [ folder, url.trim() ]
       );
     }
+    // Move folder from Backlog to archive when YouTube URL is set
+    if ( url && url.trim() !== '' ) {
+      const year = folder.slice( 0, 4 );
+      const backlogDir = path.join( config.outputDirectory, `${ year } Backlog`, folder );
+      const archiveDir = path.join( config.outputDirectory, year, folder );
+      try {
+        const stat = await fs.promises.stat( backlogDir );
+        if ( stat.isDirectory() ) {
+          await fs.promises.mkdir( path.join( config.outputDirectory, year ), { recursive: true } );
+          await fs.promises.rename( backlogDir, archiveDir );
+          console.log( `[YOUTUBE] Moved ${ folder } from Backlog to ${ year }/` );
+        }
+      } catch {
+        // Folder not in Backlog — nothing to move
+      }
+    }
+
     io.emit( 'folder-changes', { name: folder } );
     res.json({ ok: true });
   } catch ( err ) {
     res.status( 500 ).json({ error: 'Failed to save YouTube URL' });
+  }
+});
+
+
+/**
+ * API endpoint to list sermon-eligible PPTX files in a Sunday folder.
+ * Returns all files matching the configured extension except the template copy (YYYYMMDD.ext).
+ */
+app.get( '/api/sermon-pptx-files', async ( req: Request, res: Response ) => {
+  const folder = req.query.folder as string;
+  if ( !folder || !/^\d{8}$/.test( folder ) ) {
+    res.status( 400 ).json({ error: 'Missing or invalid folder (YYYYMMDD required)' });
+    return;
+  }
+
+  const folderPath = await resolveFolderPath( folder );
+  if ( !folderPath ) {
+    res.json({ files: [] });
+    return;
+  }
+
+  try {
+    const files = await fs.promises.readdir( folderPath );
+    const ext = '.' + config.ext.toLowerCase();
+    const templateName = ( folder + ext ).toLowerCase();
+    const pptxFiles = files.filter( f => {
+      const lower = f.toLowerCase();
+      return lower.endsWith( ext ) && lower !== templateName;
+    });
+    res.json({ files: pptxFiles });
+  } catch {
+    res.json({ files: [] });
+  }
+});
+
+
+/**
+ * API endpoint to get the sermon info for a Sunday folder.
+ */
+app.get( '/api/sermon-info', async ( req: Request, res: Response ) => {
+  const folder = req.query.folder as string;
+  if ( !folder || !/^\d{8}$/.test( folder ) ) {
+    res.status( 400 ).json({ error: 'Missing or invalid folder (YYYYMMDD required)' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT pptx_file, title, speaker FROM sermon_info WHERE sunday_date = ?',
+      [ folder ]
+    );
+    res.json({
+      pptxFile: rows.length > 0 ? rows[ 0 ].pptx_file : null,
+      title: rows.length > 0 ? rows[ 0 ].title : null,
+      speaker: rows.length > 0 ? rows[ 0 ].speaker : null,
+    });
+  } catch {
+    res.json({ pptxFile: null, title: null, speaker: null });
+  }
+});
+
+
+/**
+ * API endpoint to save or update sermon info for a Sunday folder.
+ */
+app.put( '/api/sermon-info', async ( req: Request, res: Response ) => {
+  const { folder, pptxFile, title, speaker } = req.body || {};
+  if ( !folder || !/^\d{8}$/.test( folder ) ) {
+    res.status( 400 ).json({ error: 'Missing or invalid folder (YYYYMMDD required)' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    const trimmedTitle = title ? title.trim() : null;
+    const trimmedSpeaker = speaker ? speaker.trim() : null;
+    const trimmedFile = pptxFile ? pptxFile.trim() : null;
+
+    if ( !trimmedFile && !trimmedTitle && !trimmedSpeaker ) {
+      await pool.query( 'DELETE FROM sermon_info WHERE sunday_date = ?', [ folder ] );
+    } else {
+      await pool.query(
+        `INSERT INTO sermon_info (sunday_date, pptx_file, title, speaker)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE pptx_file = VALUES(pptx_file), title = VALUES(title), speaker = VALUES(speaker)`,
+        [ folder, trimmedFile, trimmedTitle, trimmedSpeaker ]
+      );
+    }
+    io.emit( 'folder-changes', { name: folder } );
+    res.json({ ok: true });
+  } catch ( err ) {
+    console.error( '[SERMON INFO] Error:', err );
+    res.status( 500 ).json({ error: 'Failed to save sermon info' });
+  }
+});
+
+
+/**
+ * API endpoint to list all stored speakers.
+ */
+app.get( '/api/speakers', async ( _req: Request, res: Response ) => {
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT id, name FROM speakers ORDER BY name' );
+    res.json( rows.map( r => ({ id: r.id, name: r.name }) ) );
+  } catch {
+    res.json([]);
+  }
+});
+
+
+/**
+ * API endpoint to add a new speaker to the reusable list.
+ */
+app.post( '/api/speakers', async ( req: Request, res: Response ) => {
+  const { name } = req.body || {};
+  if ( !name || !name.trim() ) {
+    res.status( 400 ).json({ error: 'Missing speaker name' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    const [ result ] = await pool.query<ResultSetHeader>(
+      'INSERT IGNORE INTO speakers (name) VALUES (?)',
+      [ name.trim() ]
+    );
+    res.json({ ok: true, id: result.insertId || null });
+  } catch ( err ) {
+    console.error( '[SPEAKERS] Error:', err );
+    res.status( 500 ).json({ error: 'Failed to add speaker' });
   }
 });
 
@@ -1278,6 +1498,179 @@ app.put( '/api/folders/:name/approve', async ( req: Request, res: Response ) => 
   } catch ( err ) {
     console.error( `[APPROVE] Failed to rename shortcut for ${ folderName }:`, err );
     res.status( 500 ).json({ error: 'Failed to rename shortcut' });
+  }
+});
+
+
+/**
+ * List video files in a Sunday folder's Vids/ subdirectory.
+ * Returns MKV and MP4 files (excluding production MP4s) with file size and type.
+ */
+app.get( '/api/folders/:name/video-files', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const folderPath = await resolveFolderPath( folderName );
+  if ( !folderPath ) {
+    res.json( [] );
+    return;
+  }
+  const vidsDir = path.join( folderPath, 'Vids' );
+  try {
+    const files = await fs.promises.readdir( vidsDir );
+    const videoFiles = [];
+
+    for ( const f of files ) {
+      const lower = f.toLowerCase();
+      const isVideo = lower.endsWith( '.mp4' ) || lower.endsWith( '.mkv' );
+      const isProduction = /^\d{8}-production\.mp4$/i.test( f );
+      if ( !isVideo || isProduction ) continue;
+
+      const stat = await fs.promises.stat( path.join( vidsDir, f ) );
+      videoFiles.push({
+        filename: f,
+        size: stat.size,
+        type: lower.endsWith( '.mkv' ) ? 'mkv' : 'mp4',
+      });
+    }
+
+    res.json( videoFiles );
+  } catch {
+    res.json( [] );
+  }
+});
+
+
+/**
+ * Generate a Kdenlive project file from selected video files.
+ * Expects cameraFile (MP4 with 1 audio + 1 video) and optional obsFile (MKV with 3 audio + 1 video).
+ */
+app.post( '/api/folders/:name/create-kdenlive', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const { obsFile, cameraFile } = req.body;
+  if ( !cameraFile ) {
+    res.status( 400 ).json({ error: 'cameraFile is required' });
+    return;
+  }
+
+  const folderPath = await resolveFolderPath( folderName );
+  if ( !folderPath ) {
+    res.status( 404 ).json({ error: 'Folder not found' });
+    return;
+  }
+  const vidsDir = path.join( folderPath, 'Vids' );
+
+  // Validate files exist
+  try {
+    if ( obsFile ) {
+      await fs.promises.access( path.join( vidsDir, obsFile ) );
+    }
+    await fs.promises.access( path.join( vidsDir, cameraFile ) );
+  } catch {
+    res.status( 404 ).json({ error: 'Video file(s) not found in Vids/' });
+    return;
+  }
+
+  const outputFile = path.join( vidsDir, `${ folderName }.kdenlive` );
+
+  // Don't overwrite existing project
+  try {
+    await fs.promises.access( outputFile );
+    res.status( 409 ).json({ error: 'Kdenlive project already exists' });
+    return;
+  } catch {
+    // File doesn't exist — good, continue
+  }
+
+  try {
+    const { generateKdenlive } = require( './kdenlive-generator' );
+    const xml = generateKdenlive({
+      sundayDate: folderName,
+      rootPath: vidsDir.replace( /\\/g, '/' ),
+      obsFile: obsFile || undefined,
+      cameraFile,
+    });
+
+    await fs.promises.writeFile( outputFile, xml, 'utf-8' );
+    console.log( `[KDENLIVE] Generated project: ${ outputFile }` );
+    io.emit( 'folder-changes', { name: folderName } );
+    res.json({ ok: true, path: `Vids/${ folderName }.kdenlive` });
+  } catch ( err ) {
+    console.error( `[KDENLIVE] Failed to generate project for ${ folderName }:`, err );
+    res.status( 500 ).json({ error: 'Failed to generate Kdenlive project' });
+  }
+});
+
+
+/**
+ * API endpoint to approve a Kdenlive project and queue a transcode job.
+ * Finds the .kdenlive file in Vids/, creates a transcode job that will
+ * render it to YYYYMMDD-production.mp4, which then auto-chains to transcription.
+ */
+app.post( '/api/folders/:name/approve-kdenlive', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const folderPath = await resolveFolderPath( folderName );
+  if ( !folderPath ) {
+    res.status( 404 ).json({ error: 'Folder not found' });
+    return;
+  }
+  const vidsDir = path.join( folderPath, 'Vids' );
+
+  try {
+    // Find the .kdenlive file
+    const vidsFiles = await fs.promises.readdir( vidsDir );
+    const kdenliveFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.kdenlive' ) );
+
+    if ( !kdenliveFile ) {
+      res.status( 404 ).json({ error: 'No Kdenlive project found in Vids/' });
+      return;
+    }
+
+    const kdenlivePath = path.join( vidsDir, kdenliveFile ).replace( /\\/g, '/' );
+    const productionPath = path.join( vidsDir, `${ folderName }-production.mp4` ).replace( /\\/g, '/' );
+
+    // Check if production MP4 already exists
+    try {
+      await fs.promises.access( path.join( vidsDir, `${ folderName }-production.mp4` ) );
+      res.status( 409 ).json({ error: 'Production MP4 already exists' });
+      return;
+    } catch {
+      // Good — production doesn't exist yet
+    }
+
+    const job = await createJobIfNotExists({
+      type: 'transcode',
+      sunday_date: folderName,
+      input_path: kdenlivePath,
+      output_path: productionPath,
+      metadata: { kdenlive_file: kdenliveFile },
+    });
+
+    if ( !job ) {
+      res.status( 409 ).json({ error: 'A transcode job already exists for this date' });
+      return;
+    }
+
+    io.emit( 'job:created', job );
+    console.log( `[KDENLIVE] Queued transcode job #${ job.id } for ${ folderName }` );
+
+    res.json({ ok: true, jobId: job.id });
+  } catch ( err ) {
+    console.error( `[KDENLIVE] Failed to approve Kdenlive for ${ folderName }:`, err );
+    res.status( 500 ).json({ error: 'Failed to queue transcode job' });
   }
 });
 
@@ -1373,16 +1766,15 @@ app.post( '/api/closing-song', ( req: Request, res: Response ) => {
 
       // Create shortcuts in every Sunday folder for this month
       if ( song ) {
-        const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
         const sundays = sundaysInMonth( month, year );
 
         for ( const day of sundays ) {
           const mm = String( month ).padStart( 2, '0' );
           const dd = String( day ).padStart( 2, '0' );
           const dateStr = `${ year }${ mm }${ dd }`;
-          const weekFolder = path.join( outputDir, dateStr );
+          const weekFolder = await resolveFolderPath( dateStr );
 
-          if ( !fs.existsSync( weekFolder ) ) continue;
+          if ( !weekFolder ) continue;
 
           // Remove existing closing song shortcuts
           deleteShortcutsByPrefix( weekFolder, 'closing song ' );
@@ -1529,6 +1921,116 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
   }
 
   res.json( songFiles );
+});
+
+
+/**
+ * Get song usage history and stats.
+ *
+ * @query name - song display name (required)
+ * @query number - song number (optional)
+ * @query book - book/source folder name (optional)
+ */
+app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
+  const name = req.query.name as string;
+  if ( !name ) {
+    res.status( 400 ).json({ error: 'name parameter is required' });
+    return;
+  }
+
+  const number = req.query.number as string | undefined;
+  const book = req.query.book as string | undefined;
+  const normalized = normalizeSongName( name );
+
+  try {
+    const pool = getPool();
+
+    // Tiered song lookup (read-only, mirrors findOrCreateSong tiers)
+    let songId: number | null = null;
+
+    if ( number && book ) {
+      const [ rows ] = await pool.query<RowDataPacket[]>(
+        'SELECT id FROM songs WHERE number = ? AND normalized_name = ? AND book = ?',
+        [ number, normalized, book ]
+      );
+      if ( rows.length === 1 ) songId = rows[ 0 ].id;
+    }
+
+    if ( songId === null && number ) {
+      const [ rows ] = await pool.query<RowDataPacket[]>(
+        'SELECT id FROM songs WHERE number = ? AND normalized_name = ?',
+        [ number, normalized ]
+      );
+      if ( rows.length === 1 ) songId = rows[ 0 ].id;
+    }
+
+    if ( songId === null && book ) {
+      const [ rows ] = await pool.query<RowDataPacket[]>(
+        'SELECT id FROM songs WHERE normalized_name = ? AND book = ?',
+        [ normalized, book ]
+      );
+      if ( rows.length === 1 ) songId = rows[ 0 ].id;
+    }
+
+    if ( songId === null ) {
+      const [ rows ] = await pool.query<RowDataPacket[]>(
+        'SELECT id FROM songs WHERE normalized_name = ?',
+        [ normalized ]
+      );
+      if ( rows.length === 1 ) songId = rows[ 0 ].id;
+    }
+
+    // Song not in DB — return empty stats
+    if ( songId === null ) {
+      res.json({
+        name,
+        number: number || null,
+        book: book || null,
+        ccli: null,
+        totalUsed: 0,
+        firstUsed: null,
+        lastUsed: null,
+        history: [],
+      });
+      return;
+    }
+
+    // Fetch song details
+    const [ songRows ] = await pool.query<RowDataPacket[]>(
+      'SELECT name, number, book, ccli FROM songs WHERE id = ?',
+      [ songId ]
+    );
+    const song = songRows[ 0 ];
+
+    // Fetch usage history
+    const [ histRows ] = await pool.query<RowDataPacket[]>(
+      `SELECT sunday_date, slot_type, slot_number, slot_suffix
+       FROM song_selections
+       WHERE song_id = ? AND removed_at IS NULL
+       ORDER BY sunday_date DESC, slot_type, slot_number`,
+      [ songId ]
+    );
+
+    const history = histRows.map( ( r: any ) => ({
+      sundayDate: r.sunday_date,
+      slotType: r.slot_type,
+      slotNumber: r.slot_number,
+      slotSuffix: r.slot_suffix || null,
+    }));
+
+    res.json({
+      name: song.name,
+      number: song.number || null,
+      book: song.book || null,
+      ccli: song.ccli || null,
+      totalUsed: history.length,
+      firstUsed: history.length > 0 ? history[ history.length - 1 ].sundayDate : null,
+      lastUsed: history.length > 0 ? history[ 0 ].sundayDate : null,
+      history,
+    });
+  } catch {
+    res.status( 503 ).json({ error: 'Database not available' });
+  }
 });
 
 
@@ -1784,22 +2286,6 @@ async function scanFolders() {
 
       const mp4Files = videoFiles.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
       const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
-      const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
-
-      if ( rawMp4s.length >= 2 && !productionFile ) {
-        // Two+ raw MP4s without a production file: create video-alignment job
-        const job = await createJobIfNotExists({
-          type: 'video-alignment',
-          sunday_date: key.replace( /-/g, '' ),
-          input_path: vidsDir,
-          output_path: path.join( vidsDir, `${ key.replace( /-/g, '' ) }.kdenlive` ),
-          metadata: { camera_files: rawMp4s.map( f => path.join( vidsDir, f ) ) },
-        });
-        if ( job ) {
-          io.emit( 'job:created', job );
-          console.log( `[JOBS] Auto-created video-alignment job #${ job.id } for ${ key }` );
-        }
-      }
 
       if ( productionFile ) {
         // Production MP4 exists: create transcription job if none exists
@@ -1834,9 +2320,13 @@ async function scanFolders() {
       const songs: FolderSongInfo[] = [];
 
       // Collect songs from the cached SundayFolder
-      if ( folder.song1 ) songs.push({ slotType: 'song', slotNumber: 1, name: folder.song1.name, number: folder.song1.number, book: folder.song1.book, target: folder.song1.target });
-      if ( folder.song2 ) songs.push({ slotType: 'song', slotNumber: 2, name: folder.song2.name, number: folder.song2.number, book: folder.song2.book, target: folder.song2.target });
-      if ( folder.song3 ) songs.push({ slotType: 'song', slotNumber: 3, name: folder.song3.name, number: folder.song3.number, book: folder.song3.book, target: folder.song3.target });
+      for ( const [ slotId, song ] of Object.entries( folder.songs ) ) {
+        if ( song ) {
+          const baseSlot = parseInt( slotId[ 0 ] );
+          const suffix = slotId.length > 1 ? slotId[ 1 ] : undefined;
+          songs.push({ slotType: 'song', slotNumber: baseSlot, slotSuffix: suffix, name: song.name, number: song.number, book: song.book, target: song.target });
+        }
+      }
 
       // Collect choruses
       folder.choruses.forEach( ( c: any, i: number ) => {
@@ -1883,7 +2373,7 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
     const sundays = getSundaysInMonth( year, month );
     const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
     // For each week, try to find song shortcuts and chorus info
-    const result: Record<string, { songs: any[]; choruses: any[] }> = {};
+    const result: Record<string, { songs: Record<string, any>; choruses: any[] }> = {};
     for ( let weekIdx = 0; weekIdx < sundays.length; weekIdx++ ) {
       const sunday = sundays[ weekIdx ];
       let weekFolder: string | null = null;
@@ -1905,38 +2395,49 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
 
       if ( !weekFolder ) continue;
 
-      const songs: ( null | { number?: string; name: string; shortcut?: string } )[] = [ null, null, null ];
+      const songs: Record<string, { number?: string; name: string; shortcut?: string } | null> = { '1': null, '2': null, '3': null };
       let choruses: any[] = [];
 
-      // Find song shortcuts: song 1, song 2, song 3
+      // Find song shortcuts dynamically (supports split slots like "song 2a")
       const files = await fs.promises.readdir( weekFolder );
 
       // --- Parse songs and choruses, collecting shortcut resolution promises ---
       type PendingResolve = { promise: Promise<string>; apply: ( target: string ) => void };
       const pending: PendingResolve[] = [];
 
-      for ( let i = 1; i <= 3; i++ ) {
-        const shortcut = files.find( ( f: string ) => f.toLowerCase().startsWith( `song ${ i } ` ) && f.toLowerCase().endsWith( '.lnk' ) );
-        if ( shortcut ) {
-          const re = /^song\s+(?<slot>\d+)\s+(?:(?<number>\d{3})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
-          const match = shortcut.match( re );
-          let songObj: { number?: string; name: string; shortcut?: string };
-          if ( match && match.groups ) {
-            let name = match.groups.name.trim();
-            name = name.replace( /\.[a-zA-Z0-9]{2,5}$/i, '' ).replace( / - Shortcut$/i, '' ).trim();
-            songObj = match.groups.number
-              ? { number: match.groups.number, name, shortcut: '' }
-              : { name, shortcut: '' };
-          } else {
-            let rest = shortcut.replace( /^song \d+ /i, '' ).replace( /\.lnk$/i, '' );
-            rest = rest.replace( / - Shortcut$/i, '' ).trim();
-            songObj = { name: rest, shortcut: '' };
-          }
-          songs[ i - 1 ] = songObj;
+      const songShortcuts = files.filter( ( f: string ) =>
+        f.toLowerCase().startsWith( 'song ' ) && f.toLowerCase().endsWith( '.lnk' )
+      );
+
+      for ( const shortcut of songShortcuts ) {
+        const re = /^song\s+(?<slot>\d+)(?<suffix>[a-z])?\s+(?:(?<number>\d{3})(?:\s*-\s*|\s+))?(?<name>.+?)(?:\s*-\s*Shortcut)?\.lnk$/i;
+        const match = shortcut.match( re );
+        if ( match && match.groups ) {
+          const slotId = match.groups.suffix
+            ? `${ match.groups.slot }${ match.groups.suffix.toLowerCase() }`
+            : match.groups.slot;
+          let name = match.groups.name.trim();
+          name = name.replace( /\.[a-zA-Z0-9]{2,5}$/i, '' ).replace( / - Shortcut$/i, '' ).trim();
+          const songObj: { number?: string; name: string; shortcut: string } = match.groups.number
+            ? { number: match.groups.number, name, shortcut: '' }
+            : { name, shortcut: '' };
+          songs[ slotId ] = songObj;
           pending.push({
-            promise: getRelativeTarget( path.join( weekFolder, shortcut ), shortcut ),
+            promise: getRelativeTarget( path.join( weekFolder!, shortcut ), shortcut ),
             apply: ( target ) => { songObj.shortcut = target; },
           });
+        }
+      }
+
+      // Infer split state: if we see suffix 'a' for base N, ensure at least 'b' key exists
+      for ( const slotId of Object.keys( songs ) ) {
+        if ( slotId.length === 2 ) {
+          const base = slotId[ 0 ];
+          // Remove the unsplit base key if suffixed keys exist
+          if ( songs[ base ] === null ) delete songs[ base ];
+          // Ensure at least 'a' and 'b' exist
+          if ( !songs[ `${ base }a` ] && songs[ `${ base }a` ] !== null ) songs[ `${ base }a` ] = null;
+          if ( !( `${ base }b` in songs ) ) songs[ `${ base }b` ] = null;
         }
       }
 
@@ -2049,31 +2550,30 @@ app.post( '/api/update-song', ( req: Request, res: Response ) => {
       if ( !date || typeof date !== 'string' || !/^\d{8}$/.test( date ) ) {
         return res.status( 400 ).json({ error: 'Missing or invalid date (YYYYMMDD required)' });
       }
-      let y = parseInt( date.slice( 0, 4 ) );
-      let m = parseInt( date.slice( 4, 6 ) );
-      let d = parseInt( date.slice( 6, 8 ) );
-      const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
-      const weekFolder = path.join( outputDir, `${ y }${ String( m ).padStart( 2, '0' ) }${ String( d ).padStart( 2, '0' ) }` );
+      const weekFolder = await resolveFolderPath( date ) || path.join( config.outputDirectory, date );
       if ( !fs.existsSync( weekFolder ) ) fs.mkdirSync( weekFolder, { recursive: true } );
-      if ( slot === 1 || slot === 2 || slot === 3 || slot === '1' || slot === '2' || slot === '3' ) {
-        const slotNum = Number( slot );
-        deleteShortcutsByPrefix( weekFolder, `song ${ slotNum } ` );
+      // Validate slot: accepts "1", "2", "3", "2a", "2b", etc.
+      const slotStr = String( slot );
+      const slotMatch = slotStr.match( /^(\d)([a-z])?$/ );
+      if ( slotMatch ) {
+        const slotId = slotMatch[ 2 ] ? `${ slotMatch[ 1 ] }${ slotMatch[ 2 ] }` : slotMatch[ 1 ];
+        deleteShortcutsByPrefix( weekFolder, `song ${ slotId } ` );
         const songFile = findSongFile( song, config.songsDirectory );
         if ( !songFile ) {
-          console.log( `[SONG SHORTCUT] Song ${ slotNum }: Song file not found in library for ${ song.number || '' } ${ song.name }` );
+          console.log( `[SONG SHORTCUT] Song ${ slotId }: Song file not found in library for ${ song.number || '' } ${ song.name }` );
           return res.status( 404 ).json({ error: 'Song file not found in library', status: 'not-found' });
         }
-        const shortcutName = `song ${ slotNum } ${ song.number ? song.number + ' - ' : '' }${ song.name }`.replace( /[\\/:*?"<>|]/g, '_' ) + ' - Shortcut.lnk';
+        const shortcutName = `song ${ slotId } ${ song.number ? song.number + ' - ' : '' }${ song.name }`.replace( /[\\/:*?"<>|]/g, '_' ) + ' - Shortcut.lnk';
         const shortcutPath = path.join( weekFolder, shortcutName );
-        const desc = `Sunday Song ${ slotNum }: ${ song.number ? song.number + ' - ' : '' }${ song.name }`;
+        const desc = `Sunday Song ${ slotId }: ${ song.number ? song.number + ' - ' : '' }${ song.name }`;
         const rootPath = config.rootPath;
         const created = await createShortcut( shortcutPath, desc, songFile, rootPath );
         let status = 'created';
         if ( !created ) {
           status = 'error';
-          console.error( `[SONG SHORTCUT] Song ${ slotNum }: Failed to create shortcut '${ shortcutName }' in folder ${ weekFolder }` );
+          console.error( `[SONG SHORTCUT] Song ${ slotId }: Failed to create shortcut '${ shortcutName }' in folder ${ weekFolder }` );
         } else {
-          console.log( `[SONG SHORTCUT] Song ${ slotNum }: Created shortcut '${ shortcutName }' in folder ${ weekFolder }` );
+          console.log( `[SONG SHORTCUT] Song ${ slotId }: Created shortcut '${ shortcutName }' in folder ${ weekFolder }` );
         }
         return res.json({ success: true, status });
       }
@@ -2081,6 +2581,91 @@ app.post( '/api/update-song', ( req: Request, res: Response ) => {
     } catch ( e ) {
       console.error( e );
       res.status( 500 ).json({ error: 'Failed to save song selection', status: 'error' });
+    }
+  })();
+});
+
+
+/**
+ * API endpoint to split or unsplit a song slot.
+ * Split renames "song N ..." to "song Na ..." and creates empty "Nb" slot.
+ * Unsplit renames "song Na ..." back to "song N ..." and deletes other sub-slot shortcuts.
+ */
+app.post( '/api/song-slot-split', ( req: Request, res: Response ) => {
+  ( async () => {
+    try {
+      const { date, baseSlot, action } = req.body || {};
+      if ( !date || typeof date !== 'string' || !/^\d{8}$/.test( date ) ) {
+        return res.status( 400 ).json({ error: 'Missing or invalid date (YYYYMMDD required)' });
+      }
+      const base = parseInt( baseSlot );
+      if ( ![ 1, 2, 3 ].includes( base ) ) {
+        return res.status( 400 ).json({ error: 'baseSlot must be 1, 2, or 3' });
+      }
+      if ( ![ 'split', 'unsplit' ].includes( action ) ) {
+        return res.status( 400 ).json({ error: 'action must be "split" or "unsplit"' });
+      }
+
+      const weekFolder = await resolveFolderPath( date ) || path.join( config.outputDirectory, date );
+      if ( !fs.existsSync( weekFolder ) ) {
+        return res.status( 404 ).json({ error: 'Folder not found' });
+      }
+
+      const files = fs.readdirSync( weekFolder );
+
+      if ( action === 'split' ) {
+        // Find existing "song N ..." shortcut and rename to "song Na ..."
+        const existing = files.find( f =>
+          f.toLowerCase().startsWith( `song ${ base } ` ) && f.toLowerCase().endsWith( '.lnk' )
+        );
+        if ( existing ) {
+          const newName = existing.replace(
+            new RegExp( `^(song\\s+${ base })(\\s)`, 'i' ),
+            `$1a$2`
+          );
+          fs.renameSync(
+            path.join( weekFolder, existing ),
+            path.join( weekFolder, newName )
+          );
+          console.log( `[SPLIT] Renamed '${ existing }' to '${ newName }'` );
+        }
+        io.emit( 'folder-changes' );
+        return res.json({ success: true, action: 'split', baseSlot: base });
+      }
+
+      if ( action === 'unsplit' ) {
+        // Find "song Na ..." shortcut and rename to "song N ..."
+        const firstSub = files.find( f =>
+          f.toLowerCase().startsWith( `song ${ base }a ` ) && f.toLowerCase().endsWith( '.lnk' )
+        );
+        if ( firstSub ) {
+          const newName = firstSub.replace(
+            new RegExp( `^(song\\s+${ base })a(\\s)`, 'i' ),
+            `$1$2`
+          );
+          fs.renameSync(
+            path.join( weekFolder, firstSub ),
+            path.join( weekFolder, newName )
+          );
+          console.log( `[UNSPLIT] Renamed '${ firstSub }' to '${ newName }'` );
+        }
+        // Delete all other sub-slot shortcuts (b, c, d, ...)
+        const otherSubs = files.filter( f => {
+          const lower = f.toLowerCase();
+          return lower.endsWith( '.lnk' ) &&
+            /^song\s+\d+[b-z]\s/i.test( f ) &&
+            f.match( new RegExp( `^song\\s+${ base }[b-z]\\s`, 'i' ) );
+        });
+        for ( const sub of otherSubs ) {
+          fs.unlinkSync( path.join( weekFolder, sub ) );
+          console.log( `[UNSPLIT] Deleted '${ sub }'` );
+        }
+        io.emit( 'folder-changes' );
+        return res.json({ success: true, action: 'unsplit', baseSlot: base });
+      }
+    } catch ( e ) {
+      console.error( e );
+      res.status( 500 ).json({ error: 'Failed to split/unsplit song slot' });
     }
   })();
 });
@@ -2096,11 +2681,7 @@ app.post( '/api/chorus-update', ( req: Request, res: Response ) => {
       if ( !date || typeof date !== 'string' || !/^\d{8}$/.test( date ) ) {
         return res.status( 400 ).json({ error: 'Missing or invalid date (YYYYMMDD required)' });
       }
-      let y = parseInt( date.slice( 0, 4 ) );
-      let m = parseInt( date.slice( 4, 6 ) );
-      let d = parseInt( date.slice( 6, 8 ) );
-      const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
-      const weekFolder = path.join( outputDir, `${ y }${ String( m ).padStart( 2, '0' ) }${ String( d ).padStart( 2, '0' ) }` );
+      const weekFolder = await resolveFolderPath( date ) || path.join( config.outputDirectory, date );
       if ( !fs.existsSync( weekFolder ) ) fs.mkdirSync( weekFolder, { recursive: true } );
       if ( slot === 'choruses' && Array.isArray( choruses ) ) {
         // Delete all existing chorus shortcuts and log each deletion

@@ -48,6 +48,14 @@
   width: 100%;
 }
 
+.clickable-row {
+  cursor: pointer;
+
+  &:hover {
+    background: rgba( 110, 168, 254, 0.06 );
+  }
+}
+
 .empty-state {
   text-align: center;
   padding: 48px 16px;

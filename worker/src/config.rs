@@ -45,6 +45,7 @@ pub struct ToolsConfig {
     pub whisper_model: String,
     pub claude_path: String,
     pub ffmpeg_path: String,
+    pub melt_path: String,
 }
 
 
@@ -95,6 +96,7 @@ impl Default for AppConfig {
                 whisper_model: "large-v3".to_string(),
                 claude_path: "claude".to_string(),
                 ffmpeg_path: "ffmpeg".to_string(),
+                melt_path: "melt".to_string(),
             },
             web_ui: WebUiConfig {
                 port: 9090,

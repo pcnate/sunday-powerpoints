@@ -55,6 +55,7 @@ struct ConfigUpdate {
     whisper_model: Option<String>,
     claude_path: Option<String>,
     ffmpeg_path: Option<String>,
+    melt_path: Option<String>,
 }
 
 
@@ -198,6 +199,9 @@ async fn update_config_handler(
     }
     if let Some( v ) = update.ffmpeg_path {
         config.tools.ffmpeg_path = v;
+    }
+    if let Some( v ) = update.melt_path {
+        config.tools.melt_path = v;
     }
 
     // Save to disk
@@ -484,6 +488,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     <select id="queueTypeFilter" onchange="loadQueue()">
       <option value="">All Types</option>
       <option value="video-alignment">Video Alignment</option>
+      <option value="transcode">Transcode</option>
       <option value="transcription">Transcription</option>
       <option value="claude-processing">Claude Processing</option>
     </select>
@@ -509,6 +514,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     <label>Job Types</label>
     <div class="checkbox-group">
       <label><input type="checkbox" id="type_alignment" value="video-alignment"> Video Alignment</label>
+      <label><input type="checkbox" id="type_transcode" value="transcode"> Transcode</label>
       <label><input type="checkbox" id="type_transcription" value="transcription"> Transcription</label>
       <label><input type="checkbox" id="type_claude" value="claude-processing"> Claude Processing</label>
     </div>
@@ -562,6 +568,13 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
       <label for="ffmpeg_path">FFmpeg</label>
       <input id="ffmpeg_path" type="text">
     </div>
+  </div>
+  <div class="row">
+    <div class="form-group">
+      <label for="melt_path">Melt (Kdenlive)</label>
+      <input id="melt_path" type="text">
+    </div>
+    <div class="form-group"></div>
   </div>
 
   <button onclick="saveConfig()">Save Configuration</button>
@@ -628,6 +641,7 @@ async function loadConfig() {
     // Set checkboxes
     const types = c.worker.types || [];
     document.getElementById('type_alignment').checked = types.includes('video-alignment');
+    document.getElementById('type_transcode').checked = types.includes('transcode');
     document.getElementById('type_transcription').checked = types.includes('transcription');
     document.getElementById('type_claude').checked = types.includes('claude-processing');
 
@@ -640,12 +654,14 @@ async function loadConfig() {
     document.getElementById('whisper_model').value = c.tools.whisper_model;
     document.getElementById('claude_path').value = c.tools.claude_path;
     document.getElementById('ffmpeg_path').value = c.tools.ffmpeg_path;
+    document.getElementById('melt_path').value = c.tools.melt_path;
   } catch(e) { console.error('Config fetch failed', e); }
 }
 
 function getSelectedTypes() {
   const types = [];
   if (document.getElementById('type_alignment').checked) types.push('video-alignment');
+  if (document.getElementById('type_transcode').checked) types.push('transcode');
   if (document.getElementById('type_transcription').checked) types.push('transcription');
   if (document.getElementById('type_claude').checked) types.push('claude-processing');
   return types;
@@ -667,6 +683,7 @@ async function saveConfig() {
       whisper_model: document.getElementById('whisper_model').value,
       claude_path: document.getElementById('claude_path').value,
       ffmpeg_path: document.getElementById('ffmpeg_path').value,
+      melt_path: document.getElementById('melt_path').value,
     };
     const r = await fetch('/api/config', {
       method: 'POST',

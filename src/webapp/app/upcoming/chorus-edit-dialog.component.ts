@@ -126,7 +126,8 @@ export class ChorusEditDialogComponent {
    */
   change(): void {
     const selectRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '900px',
+      width: '850px',
+      maxWidth: '92vw',
       maxHeight: '80vh',
       data: { currentSong: this.data.chorus, slot: 'chorus' },
     });

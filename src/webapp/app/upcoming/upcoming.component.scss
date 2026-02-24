@@ -64,12 +64,15 @@
   background: #2b3035;
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 8px;
+  display: flex;
+  flex-direction: column;
 
   // Normalize Angular Material card content padding to match card-top
   ::ng-deep .mat-mdc-card-content {
     padding: 0 8px 8px;
     position: relative;
     z-index: 1;
+    margin-top: auto;
   }
 
   mat-card-header {
@@ -83,11 +86,34 @@
 
   mat-card-subtitle {
     color: #adb5bd;
+
+    .folder-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 0.6rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-left: 6px;
+      vertical-align: middle;
+
+      &.backlog {
+        background: rgba( 110, 168, 254, 0.15 );
+        color: #6ea8fe;
+      }
+
+      &.archived {
+        background: rgba( 117, 183, 152, 0.15 );
+        color: #75b798;
+      }
+    }
   }
 
   .week-status-icons {
     display: flex;
-    gap: 4px;
+    align-items: center;
+    gap: 2px;
     margin-left: auto;
 
     .status-icon {
@@ -140,8 +166,8 @@
     }
 
     .approve-button {
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 24px;
       padding: 0;
       display: inline-flex;
       align-items: center;
@@ -155,8 +181,8 @@
     }
 
     .card-menu-button {
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 24px;
       padding: 0;
       display: inline-flex;
       align-items: center;
@@ -178,7 +204,7 @@
   &.past {
     opacity: 0.85;
 
-    .card-top .chorus-button,
+    .chorus-button,
     .song-button {
       pointer-events: none;
       border-color: transparent !important;
@@ -194,7 +220,9 @@
       }
     }
 
-    .card-top .add-chorus-button {
+    .add-chorus-button,
+    .slot-menu-button,
+    .sermon-ellipsis {
       display: none;
     }
   }
@@ -267,7 +295,7 @@
   }
 }
 
-// Top section: header + choruses — flows normally, overlays the thumbnail
+// Top section: header — flows normally, overlays the thumbnail
 .card-top {
   position: relative;
   z-index: 1;
@@ -297,10 +325,6 @@
     font-size: 0.8rem;
     line-height: 1.2;
   }
-
-  .chorus-list {
-    margin-top: 4px;
-  }
 }
 
 // Text shadows + overlay styles when thumbnail is present
@@ -319,15 +343,6 @@
       filter: drop-shadow( 0 1px 2px rgba( 0, 0, 0, 0.6 ) );
     }
 
-    .chorus-button {
-      border-color: rgba( 255, 255, 255, 0.3 );
-      text-shadow: 0 1px 2px rgba( 0, 0, 0, 0.6 );
-    }
-
-    .add-chorus-button {
-      border-color: rgba( 255, 255, 255, 0.25 );
-      text-shadow: 0 1px 2px rgba( 0, 0, 0, 0.6 );
-    }
   }
 }
 
@@ -342,6 +357,32 @@
   display: flex;
   align-items: center;
   gap: 8px;
+
+  .slot-menu-button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.3;
+
+    mat-icon {
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+      color: #adb5bd;
+    }
+
+    &:hover:not([disabled]) {
+      opacity: 1;
+
+      mat-icon {
+        color: #6ea8fe;
+      }
+    }
+  }
 }
 
 .verse-slot {
@@ -387,6 +428,39 @@
   }
 }
 
+.sermon-slot {
+  .sermon-ellipsis {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    margin-left: auto;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.4;
+
+    mat-icon {
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+      color: #adb5bd;
+    }
+
+    &:hover:not([disabled]) {
+      opacity: 1;
+
+      mat-icon {
+        color: #6ea8fe;
+      }
+    }
+  }
+
+  &.empty .sermon-ellipsis {
+    opacity: 0.6;
+  }
+}
+
 .slot-label {
   font-size: 0.8rem;
   color: #adb5bd;
@@ -407,6 +481,15 @@
     border-style: dashed;
     color: #adb5bd;
   }
+}
+
+.song-display {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #6ea8fe;
+  height: 36px;
+  line-height: 36px;
+  padding: 0 25px;
 }
 
 .chorus-list {

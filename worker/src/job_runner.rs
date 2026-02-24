@@ -39,6 +39,7 @@ pub async fn execute(
 
     let result = match job.job_type.as_str() {
         "video-alignment" => runners::alignment::run( job, config, &api, &shutdown ).await,
+        "transcode" => runners::transcode::run( job, config, &api, &shutdown ).await,
         "transcription" => runners::transcription::run( job, config, &api, &shutdown ).await,
         "claude-processing" => runners::claude::run( job, config, &api, &shutdown ).await,
         other => {

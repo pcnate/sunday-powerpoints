@@ -135,7 +135,8 @@
   margin: 0 2px;
 }
 
-.backlog-badge {
+.backlog-badge,
+.archived-badge {
   display: inline-block;
   padding: 1px 8px;
   border-radius: 10px;
@@ -143,9 +144,17 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  width: fit-content;
+}
+
+.backlog-badge {
   background: rgba( 110, 168, 254, 0.15 );
   color: #6ea8fe;
-  width: fit-content;
+}
+
+.archived-badge {
+  background: rgba( 117, 183, 152, 0.15 );
+  color: #75b798;
 }
 
 // Progress indicator

@@ -42,6 +42,7 @@
           </span>
         </div>
         <span class="backlog-badge" *ngIf="folder.backlog">Backlog</span>
+        <span class="archived-badge" *ngIf="folder.archived">Archived</span>
       </div>
 
       <!-- Progress indicator -->
@@ -57,24 +58,34 @@
 
       <!-- Stage 1 status icons (always shown) -->
       <div class="folder-status">
-        <mat-icon
-          [class.icon-ready]="folder.hasSong1"
-          [class.icon-missing]="!folder.hasSong1"
-          [matTooltip]="folder.hasSong1 ? 'Song 1 ready' : 'No Song 1'">
-          looks_one
-        </mat-icon>
-        <mat-icon
-          [class.icon-ready]="folder.hasSong2"
-          [class.icon-missing]="!folder.hasSong2"
-          [matTooltip]="folder.hasSong2 ? 'Song 2 ready' : 'No Song 2'">
-          looks_two
-        </mat-icon>
-        <mat-icon
-          [class.icon-ready]="folder.hasSong3"
-          [class.icon-missing]="!folder.hasSong3"
-          [matTooltip]="folder.hasSong3 ? 'Song 3 ready' : 'No Song 3'">
-          looks_3
-        </mat-icon>
+        <!-- Dynamic song icons when songSlots available -->
+        <ng-container *ngIf="folder.songSlots?.length; else legacySongIcons">
+          <mat-icon *ngFor="let slotId of folder.songSlots"
+            class="icon-ready"
+            [matTooltip]="'Song ' + slotId + ' ready'">
+            music_note
+          </mat-icon>
+        </ng-container>
+        <ng-template #legacySongIcons>
+          <mat-icon
+            [class.icon-ready]="folder.hasSong1"
+            [class.icon-missing]="!folder.hasSong1"
+            [matTooltip]="folder.hasSong1 ? 'Song 1 ready' : 'No Song 1'">
+            looks_one
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="folder.hasSong2"
+            [class.icon-missing]="!folder.hasSong2"
+            [matTooltip]="folder.hasSong2 ? 'Song 2 ready' : 'No Song 2'">
+            looks_two
+          </mat-icon>
+          <mat-icon
+            [class.icon-ready]="folder.hasSong3"
+            [class.icon-missing]="!folder.hasSong3"
+            [matTooltip]="folder.hasSong3 ? 'Song 3 ready' : 'No Song 3'">
+            looks_3
+          </mat-icon>
+        </ng-template>
         <mat-icon
           [class.icon-ready]="folder.hasPre"
           [class.icon-missing]="!folder.hasPre"
@@ -92,21 +103,25 @@
         <ng-container *ngIf="folder.stage === 2">
           <span class="status-divider">|</span>
           <mat-icon
-            [class.icon-ready]="folder.hasMp4"
-            [class.icon-missing]="!folder.hasMp4"
-            [matTooltip]="folder.hasMp4 ? 'Video ready' : 'No video'">
+            [class.icon-ready]="folder.hasVideo"
+            [class.icon-missing]="!folder.hasVideo"
+            [matTooltip]="folder.hasVideo ? 'Video ready' : 'No video'">
             videocam
           </mat-icon>
           <mat-icon
             [class.icon-ready]="folder.hasKdenlive"
             [class.icon-missing]="!folder.hasKdenlive"
-            [matTooltip]="folder.hasKdenlive ? 'Kdenlive project ready' : 'No Kdenlive project'">
+            [class.icon-clickable]="folder.hasVideo && !folder.hasKdenlive"
+            [matTooltip]="folder.hasKdenlive ? 'Kdenlive project ready' : (folder.hasVideo ? 'Create Kdenlive project' : 'No Kdenlive project')"
+            (click)="folder.hasVideo && !folder.hasKdenlive ? openKdenlive( folder ) : null">
             movie_creation
           </mat-icon>
           <mat-icon
             [class.icon-ready]="folder.hasProduction"
             [class.icon-missing]="!folder.hasProduction"
-            [matTooltip]="folder.hasProduction ? 'Production MP4 ready' : 'No production MP4'">
+            [class.icon-clickable]="folder.hasKdenlive && !folder.hasProduction"
+            [matTooltip]="folder.hasProduction ? 'Production MP4 ready' : (folder.hasKdenlive ? 'Queue transcode' : 'No production MP4')"
+            (click)="folder.hasKdenlive && !folder.hasProduction ? approveKdenlive( folder ) : null">
             movie
           </mat-icon>
           <mat-icon

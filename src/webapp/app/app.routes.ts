@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 
 export const routes: Routes = [
   { path: '', redirectTo: 'planning', pathMatch: 'full' },
+  { path: 'planning/:year/:month', children: [] },
   { path: 'planning', children: [] },
   { path: 'library', children: [] },
   { path: 'outstanding', children: [] },

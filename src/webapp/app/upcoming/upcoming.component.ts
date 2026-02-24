@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { CommonModule, Location } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
@@ -21,6 +21,8 @@ import { VerseDialogComponent, VerseDialogData, VerseDialogResult } from './vers
 import { ConfirmDialogComponent } from '../admin/confirm-dialog.component';
 import { ChorusEditDialogComponent, ChorusEditDialogResult } from './chorus-edit-dialog.component';
 import { YoutubeDialogComponent, YoutubeDialogData } from './youtube-dialog.component';
+import { KdenliveDialogComponent } from '../shared/kdenlive-dialog.component';
+import { SermonPickerDialogComponent, SermonPickerDialogResult } from './sermon-picker-dialog.component';
 
 
 /**
@@ -37,7 +39,7 @@ interface Song {
  * Week selection data from the API.
  */
 interface WeekSelection {
-  songs: ( Song | null )[];
+  songs: Record<string, Song | null>;
   choruses: Song[];
 }
 
@@ -53,13 +55,22 @@ interface FolderInfo {
   presentationSize: string | null;
   presentationModified: string | null;
   hasMp4: boolean;
+  hasVideo: boolean;
+  hasKdenlive: boolean;
+  hasProduction: boolean;
   videoFileName: string | null;
   youtubeUrl: string | null;
   thumbnail: string | null;
   hasSong1: boolean;
   hasSong2: boolean;
   hasSong3: boolean;
+  songSlots?: string[];
   hasNotes: string | null;
+  sermonPptxFile: string | null;
+  sermonTitle: string | null;
+  sermonSpeaker: string | null;
+  backlog: boolean;
+  archived: boolean;
 }
 
 
@@ -118,15 +129,31 @@ export class UpcomingComponent implements OnInit, OnDestroy {
   constructor(
     private http: HttpClient,
     private dialog: MatDialog,
-    private socketService: SocketService
+    private socketService: SocketService,
+    private location: Location
   ) {
-    const [ defaultMonth, defaultYear ] = this.getDefaultMonth();
-    this.selectedMonth = defaultMonth;
-    this.selectedYear = defaultYear;
+    // Try to read year/month from URL: /planning/:year/:month
+    const urlMatch = window.location.pathname.match( /\/planning\/(\d{4})\/(\d{1,2})/ );
+    if ( urlMatch ) {
+      const urlYear = parseInt( urlMatch[ 1 ] );
+      const urlMonth = parseInt( urlMatch[ 2 ] );
+      if ( urlYear >= 2020 && urlYear <= 2100 && urlMonth >= 1 && urlMonth <= 12 ) {
+        this.selectedYear = urlYear;
+        this.selectedMonth = urlMonth;
+      } else {
+        const [ defaultMonth, defaultYear ] = this.getDefaultMonth();
+        this.selectedMonth = defaultMonth;
+        this.selectedYear = defaultYear;
+      }
+    } else {
+      const [ defaultMonth, defaultYear ] = this.getDefaultMonth();
+      this.selectedMonth = defaultMonth;
+      this.selectedYear = defaultYear;
+    }
 
-    // Year range: current year -1 to +1
+    // Year range: current year -2 to +1
     const currentYear = new Date().getFullYear();
-    for ( let y = currentYear - 1; y <= currentYear + 1; y++ ) {
+    for ( let y = currentYear - 2; y <= currentYear + 1; y++ ) {
       this.years.push( y );
     }
   }
@@ -136,6 +163,9 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    * Load data on init and subscribe to real-time folder changes.
    */
   ngOnInit(): void {
+    // Set initial URL to reflect selected month/year
+    this.updateRoute();
+
     // Debounce reload requests so rapid socket events don't spam the server
     this.reload$.pipe( debounceTime( 500 ), takeUntil( this.destroy$ ) )
       .subscribe( () => this.doLoadMonth() );
@@ -168,11 +198,28 @@ export class UpcomingComponent implements OnInit, OnDestroy {
 
 
   /**
+   * Handle month/year selector changes — updates the URL, clears editing state, and reloads.
+   */
+  changeMonth(): void {
+    this.editingPastWeeks.clear();
+    this.updateRoute();
+    this.loadMonth();
+  }
+
+
+  /**
+   * Update the browser URL to reflect the current year/month selection.
+   */
+  private updateRoute(): void {
+    this.location.replaceState( `/planning/${ this.selectedYear }/${ this.selectedMonth }` );
+  }
+
+
+  /**
    * Load song selections and folders for the selected month.
    * Immediately builds skeleton weeks from date math, then fills in data as responses arrive.
    */
   private doLoadMonth(): void {
-    this.editingPastWeeks.clear();
     this.loading = true;
 
     // Immediately build skeleton weeks so cards render right away
@@ -220,14 +267,15 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    * Open the song selection dialog for a specific slot.
    *
    * @param weekIdx - index of the week
-   * @param slot - song slot (1, 2, or 3)
+   * @param slot - song slot identifier (e.g., "1", "2", "2a", "2b", "3")
    */
-  selectSong( weekIdx: number, slot: number ): void {
+  selectSong( weekIdx: number, slot: string ): void {
     const week = this.weeks[ weekIdx ];
-    const currentSong = week.selection?.songs?.[ slot - 1 ] || null;
+    const currentSong = week.selection?.songs?.[ slot ] || null;
 
     const dialogRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '900px',
+      width: '850px',
+      maxWidth: '92vw',
       maxHeight: '80vh',
       data: { currentSong, slot },
     });
@@ -423,7 +471,8 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    */
   addChorus( weekIdx: number ): void {
     const dialogRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '900px',
+      width: '850px',
+      maxWidth: '92vw',
       maxHeight: '80vh',
       data: { currentSong: null, slot: 'chorus' },
     });
@@ -542,7 +591,8 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    */
   selectClosingSong(): void {
     const dialogRef = this.dialog.open( SongSelectDialogComponent, {
-      width: '900px',
+      width: '850px',
+      maxWidth: '92vw',
       maxHeight: '80vh',
       data: { currentSong: this.closingSong, slot: 'closing' },
     });
@@ -597,6 +647,64 @@ export class UpcomingComponent implements OnInit, OnDestroy {
         this.loadMonth();
       }
     } );
+  }
+
+
+  /**
+   * Open the Kdenlive project creation dialog for a week.
+   *
+   * @param week - the week whose folder should get a Kdenlive project
+   */
+  openKdenlive( week: { date: string; folder: FolderInfo | null } ): void {
+    if ( !week.date ) return;
+
+    this.dialog.open( KdenliveDialogComponent, {
+      width: '550px',
+      data: { folderName: week.date },
+    }).afterClosed().subscribe( ( created ) => {
+      if ( created ) this.loadMonth();
+    });
+  }
+
+
+  /**
+   * Approve a Kdenlive project and queue a transcode job for a week.
+   *
+   * @param week - the week whose Kdenlive project to approve
+   */
+  approveKdenlive( week: { date: string; folder: FolderInfo | null } ): void {
+    if ( !week.date ) return;
+
+    this.http.post<{ ok: boolean; jobId: number }>( `/api/folders/${ week.date }/approve-kdenlive`, {} ).subscribe({
+      next: () => this.loadMonth(),
+      error: ( err ) => console.error( 'Failed to approve Kdenlive:', err ),
+    });
+  }
+
+
+  /**
+   * Open the sermon picker dialog for a week.
+   *
+   * @param week - the week to edit sermon info for
+   */
+  openSermonPicker( week: { date: string; folder: FolderInfo | null } ): void {
+    if ( !week.date ) return;
+
+    const dialogRef = this.dialog.open( SermonPickerDialogComponent, {
+      width: '450px',
+      data: {
+        folderDate: week.date,
+        currentPptxFile: week.folder?.sermonPptxFile || null,
+        currentTitle: week.folder?.sermonTitle || null,
+        currentSpeaker: week.folder?.sermonSpeaker || null,
+      },
+    });
+
+    dialogRef.afterClosed().subscribe( ( result: SermonPickerDialogResult | undefined ) => {
+      if ( result !== undefined ) {
+        this.loadMonth();
+      }
+    });
   }
 
 
@@ -712,6 +820,177 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    */
   trackByDate( index: number, week: { date: string } ): string {
     return week.date;
+  }
+
+
+  /**
+   * Get sorted song slot IDs for a week, grouped by base number.
+   *
+   * @param week - the week object
+   * @returns sorted slot IDs like ["1", "2a", "2b", "3"]
+   */
+  getSongSlots( week: { selection: WeekSelection | null } ): string[] {
+    if ( week.selection?.songs ) {
+      return Object.keys( week.selection.songs ).sort( ( a, b ) => {
+        const aNum = parseInt( a );
+        const bNum = parseInt( b );
+        if ( aNum !== bNum ) return aNum - bNum;
+        return a.localeCompare( b );
+      });
+    }
+    return [ '1', '2', '3' ];
+  }
+
+
+  /**
+   * Get the base slot number from a slot ID.
+   *
+   * @param slotId - slot identifier like "1", "2a", "2b"
+   * @returns base number (1, 2, or 3)
+   */
+  getBaseSlot( slotId: string ): number {
+    return parseInt( slotId[ 0 ] );
+  }
+
+
+  /**
+   * Get the display label for a song slot.
+   *
+   * @param slotId - slot identifier like "1", "2a", "2b"
+   * @returns label like "Song 1", "Song 2a"
+   */
+  slotLabel( slotId: string ): string {
+    return `Song ${ slotId }`;
+  }
+
+
+  /**
+   * Check if a base slot is currently split (has letter-suffixed keys).
+   *
+   * @param week - the week object
+   * @param baseSlot - base slot number (1, 2, or 3)
+   * @returns true if the slot has any suffixed keys
+   */
+  isSlotSplit( week: { selection: WeekSelection | null }, baseSlot: number ): boolean {
+    if ( !week.selection?.songs ) return false;
+    return Object.keys( week.selection.songs ).some( k =>
+      k.length === 2 && parseInt( k[ 0 ] ) === baseSlot
+    );
+  }
+
+
+  /**
+   * Get the number of sub-slots for a split base slot.
+   *
+   * @param week - the week object
+   * @param baseSlot - base slot number
+   * @returns count of suffixed keys for this base
+   */
+  getSubSlotCount( week: { selection: WeekSelection | null }, baseSlot: number ): number {
+    if ( !week.selection?.songs ) return 0;
+    return Object.keys( week.selection.songs ).filter( k =>
+      k.length === 2 && parseInt( k[ 0 ] ) === baseSlot
+    ).length;
+  }
+
+
+  /**
+   * Split a song slot into two sub-slots (e.g., Song 2 → Song 2a, Song 2b).
+   *
+   * @param weekIdx - index of the week
+   * @param baseSlot - base slot number (1, 2, or 3)
+   */
+  splitSlot( weekIdx: number, baseSlot: number ): void {
+    const week = this.weeks[ weekIdx ];
+    this.http.post( '/api/song-slot-split', {
+      date: week.date,
+      baseSlot,
+      action: 'split',
+    }).subscribe({
+      next: () => this.loadMonth(),
+      error: ( err ) => console.error( 'Failed to split slot:', err ),
+    });
+  }
+
+
+  /**
+   * Unsplit a song slot back to a single slot.
+   *
+   * @param weekIdx - index of the week
+   * @param baseSlot - base slot number (1, 2, or 3)
+   */
+  unsplitSlot( weekIdx: number, baseSlot: number ): void {
+    const week = this.weeks[ weekIdx ];
+    this.http.post( '/api/song-slot-split', {
+      date: week.date,
+      baseSlot,
+      action: 'unsplit',
+    }).subscribe({
+      next: () => this.loadMonth(),
+      error: ( err ) => console.error( 'Failed to unsplit slot:', err ),
+    });
+  }
+
+
+  /**
+   * Add a sub-slot to an already-split base slot (frontend-only until a song is assigned).
+   *
+   * @param weekIdx - index of the week
+   * @param baseSlot - base slot number (1, 2, or 3)
+   */
+  addSubSlot( weekIdx: number, baseSlot: number ): void {
+    const week = this.weeks[ weekIdx ];
+    if ( !week.selection?.songs ) return;
+
+    // Find the next available suffix letter
+    const existingSuffixes = Object.keys( week.selection.songs )
+      .filter( k => k.length === 2 && parseInt( k[ 0 ] ) === baseSlot )
+      .map( k => k[ 1 ] )
+      .sort();
+
+    const lastSuffix = existingSuffixes[ existingSuffixes.length - 1 ] || 'a';
+    const nextSuffix = String.fromCharCode( lastSuffix.charCodeAt( 0 ) + 1 );
+    const newKey = `${ baseSlot }${ nextSuffix }`;
+
+    week.selection.songs[ newKey ] = null;
+  }
+
+
+  /**
+   * Remove the last sub-slot from a split base slot.
+   * If only 2 sub-slots remain, unsplits entirely.
+   *
+   * @param weekIdx - index of the week
+   * @param baseSlot - base slot number (1, 2, or 3)
+   */
+  removeSubSlot( weekIdx: number, baseSlot: number ): void {
+    const subCount = this.getSubSlotCount( this.weeks[ weekIdx ], baseSlot );
+    if ( subCount <= 2 ) {
+      this.unsplitSlot( weekIdx, baseSlot );
+      return;
+    }
+
+    const week = this.weeks[ weekIdx ];
+    if ( !week.selection?.songs ) return;
+
+    // Find the last suffix key and remove it
+    const suffixedKeys = Object.keys( week.selection.songs )
+      .filter( k => k.length === 2 && parseInt( k[ 0 ] ) === baseSlot )
+      .sort();
+
+    const lastKey = suffixedKeys[ suffixedKeys.length - 1 ];
+    if ( lastKey ) {
+      // If the last sub-slot has a song, delete the shortcut too
+      if ( week.selection.songs[ lastKey ] ) {
+        this.http.post( '/api/update-song', {
+          date: week.date,
+          slot: lastKey,
+          song: null,
+          weekIdx,
+        }).subscribe({ error: () => {} });
+      }
+      delete week.selection.songs[ lastKey ];
+    }
   }
 
 

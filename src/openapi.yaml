@@ -94,6 +94,40 @@ paths:
                 items:
                   $ref: '#/components/schemas/SongFile'
 
+  /api/songs/history:
+    get:
+      tags: [Songs]
+      summary: Get song usage history
+      description: Returns song details and all dates the song was used, with slot information.
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Song display name
+        - name: number
+          in: query
+          schema:
+            type: string
+          description: Song number (e.g. "203")
+        - name: book
+          in: query
+          schema:
+            type: string
+          description: Book/source folder name
+      responses:
+        '200':
+          description: Song details with usage history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SongHistoryResponse'
+        '400':
+          description: Missing required name parameter
+        '503':
+          description: Database not available
+
   /api/songs/create:
     post:
       tags: [Songs]
@@ -225,7 +259,9 @@ paths:
                 weekIdx:
                   type: integer
                 slot:
-                  type: integer
+                  type: string
+                  description: 'Slot identifier: "1", "2", "3", or split variants like "2a", "2b"'
+                  pattern: '^\d[a-z]?$'
                 song:
                   type: object
       responses:
@@ -240,6 +276,45 @@ paths:
                     type: boolean
                   status:
                     type: string
+
+  /api/song-slot-split:
+    post:
+      tags: [Songs]
+      summary: Split or unsplit a song slot
+      description: |
+        Split a base song slot into sub-slots (e.g., Song 2 → Song 2a, Song 2b)
+        or unsplit back to a single slot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, baseSlot, action]
+              properties:
+                date:
+                  type: string
+                  pattern: '^\d{8}$'
+                baseSlot:
+                  type: integer
+                  enum: [1, 2, 3]
+                action:
+                  type: string
+                  enum: [split, unsplit]
+      responses:
+        '200':
+          description: Split result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  action:
+                    type: string
+                  baseSlot:
+                    type: integer
 
   /api/chorus-update:
     post:
@@ -368,7 +443,7 @@ paths:
           in: query
           schema:
             type: string
-          description: Comma-separated types (video-alignment, transcription, claude-processing)
+          description: Comma-separated types (video-alignment, transcription, claude-processing, transcode)
         - name: sunday_date
           in: query
           schema:
@@ -662,6 +737,40 @@ paths:
         '500':
           description: Failed to rename shortcut
 
+  # --- Kdenlive Approval ---
+  /api/folders/{name}/approve-kdenlive:
+    post:
+      tags: [Folders]
+      summary: Approve Kdenlive project and queue transcode
+      description: >
+        Finds the .kdenlive file in the folder's Vids/ directory,
+        creates a transcode job that will render it to YYYYMMDD-production.mp4.
+        On transcode completion, a transcription job is automatically chained.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+          description: Folder name in YYYYMMDD format
+      responses:
+        '200':
+          description: Transcode job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  jobId:
+                    type: integer
+        '404':
+          description: No Kdenlive project found
+        '409':
+          description: Production MP4 already exists or transcode job already queued
+
   # --- YouTube URL ---
   /api/youtube-url:
     get:
@@ -722,6 +831,106 @@ paths:
         '500':
           description: Failed to save
 
+  /api/sermon-pptx-files:
+    get:
+      tags: [Folders]
+      summary: List sermon-eligible PPTX files in a Sunday folder
+      description: Returns all .pptx files in the folder except the template copy (YYYYMMDD.pptx).
+      parameters:
+        - name: folder
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+          description: Folder name in YYYYMMDD format
+      responses:
+        '200':
+          description: List of PPTX filenames
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Missing or invalid folder parameter
+
+  /api/sermon-info:
+    get:
+      tags: [Folders]
+      summary: Get sermon info for a Sunday
+      parameters:
+        - name: folder
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+          description: Folder name in YYYYMMDD format
+      responses:
+        '200':
+          description: Sermon info (fields may be null)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pptxFile:
+                    type: string
+                    nullable: true
+                  title:
+                    type: string
+                    nullable: true
+                  speaker:
+                    type: string
+                    nullable: true
+        '400':
+          description: Missing or invalid folder parameter
+    put:
+      tags: [Folders]
+      summary: Set or clear sermon info for a Sunday
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [folder]
+              properties:
+                folder:
+                  type: string
+                  description: Folder name in YYYYMMDD format
+                pptxFile:
+                  type: string
+                  nullable: true
+                  description: Selected sermon PPTX filename
+                title:
+                  type: string
+                  nullable: true
+                  description: Sermon title
+                speaker:
+                  type: string
+                  nullable: true
+                  description: Speaker name(s)
+      responses:
+        '200':
+          description: Sermon info saved or cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '400':
+          description: Missing or invalid folder parameter
+        '500':
+          description: Failed to save
+
 components:
   schemas:
     Job:
@@ -731,7 +940,7 @@ components:
           type: integer
         type:
           type: string
-          enum: [video-alignment, transcription, claude-processing]
+          enum: [video-alignment, transcription, claude-processing, transcode]
         status:
           type: string
           enum: [pending, queued, processing, completed, failed, cancelled]
@@ -818,7 +1027,7 @@ components:
       properties:
         type:
           type: string
-          enum: [video-alignment, transcription, claude-processing]
+          enum: [video-alignment, transcription, claude-processing, transcode]
         sunday_date:
           type: string
           pattern: '^\d{8}$'
@@ -849,7 +1058,7 @@ components:
           type: array
           items:
             type: string
-            enum: [video-alignment, transcription, claude-processing]
+            enum: [video-alignment, transcription, claude-processing, transcode]
 
     HeartbeatRequest:
       type: object
@@ -969,3 +1178,45 @@ components:
           type: string
         book:
           type: string
+
+    SongHistoryResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        number:
+          type: string
+          nullable: true
+        book:
+          type: string
+          nullable: true
+        ccli:
+          type: string
+          nullable: true
+        totalUsed:
+          type: integer
+        firstUsed:
+          type: string
+          nullable: true
+        lastUsed:
+          type: string
+          nullable: true
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/SongUsageEntry'
+
+    SongUsageEntry:
+      type: object
+      properties:
+        sundayDate:
+          type: string
+          description: YYYYMMDD or YYYYMM for closing songs
+        slotType:
+          type: string
+          enum: [song, chorus, closing]
+        slotNumber:
+          type: integer
+        slotSuffix:
+          type: string
+          nullable: true

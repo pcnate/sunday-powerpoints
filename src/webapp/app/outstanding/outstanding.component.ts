@@ -11,6 +11,7 @@ import { MatDialogModule, MatDialog } from '@angular/material/dialog';
 import { Subject, takeUntil } from 'rxjs';
 import { SocketService } from '../../socket.service';
 import { NotesDialogComponent } from '../shared/notes-dialog.component';
+import { KdenliveDialogComponent } from '../shared/kdenlive-dialog.component';
 
 
 /**
@@ -21,11 +22,13 @@ interface RawFolder {
   hasPre: boolean;
   isApproved: boolean;
   hasMp4: boolean;
+  hasVideo: boolean;
   thumbnail: string | null;
   videoFileName: string | null;
   hasSong1: boolean;
   hasSong2: boolean;
   hasSong3: boolean;
+  songSlots?: string[];
   hasNotes: boolean;
   hasKdenlive: boolean;
   hasProduction: boolean;
@@ -33,6 +36,7 @@ interface RawFolder {
   hasSermonMd: boolean;
   youtubeUrl: string | null;
   backlog: boolean;
+  archived: boolean;
 }
 
 
@@ -144,20 +148,25 @@ export class OutstandingComponent implements OnInit, OnDestroy {
     const today = new Date();
     today.setHours( 0, 0, 0, 0 );
 
-    return raw.map( ( f ) => {
+    return raw.filter( ( f ) => !f.archived ).map( ( f ) => {
       const isPast = this.parseDate( f.name ) < today;
 
-      // Stage 1: pre-service checklist
+      // Stage 1: pre-service checklist (dynamic song slots when available)
+      const songChecks = ( f.songSlots && f.songSlots.length > 0 )
+        ? f.songSlots.map( slotId => ({ key: `Song ${ slotId }`, has: true }) )
+        : [
+          { key: 'Song 1', has: f.hasSong1 },
+          { key: 'Song 2', has: f.hasSong2 },
+          { key: 'Song 3', has: f.hasSong3 },
+        ];
       const stage1 = [
-        { key: 'Song 1', has: f.hasSong1 },
-        { key: 'Song 2', has: f.hasSong2 },
-        { key: 'Song 3', has: f.hasSong3 },
+        ...songChecks,
         { key: 'Presentation', has: f.hasPre },
       ];
 
       // Stage 2: post-service pipeline (only for past dates with complete Stage 1)
       const stage2 = [
-        { key: 'Video', has: f.hasMp4 },
+        { key: 'Video', has: f.hasVideo },
         { key: 'Kdenlive', has: f.hasKdenlive },
         { key: 'Production', has: f.hasProduction },
         { key: 'Transcription', has: f.hasTranscription },
@@ -166,7 +175,7 @@ export class OutstandingComponent implements OnInit, OnDestroy {
       ];
 
       const stage1Complete = stage1.every( ( c ) => c.has );
-      const includeStage2 = isPast && stage1Complete;
+      const includeStage2 = ( isPast && stage1Complete ) || f.hasVideo;
       const checks = includeStage2 ? [ ...stage1, ...stage2 ] : stage1;
       const completionCount = checks.filter( ( c ) => c.has ).length;
       const totalItems = checks.length;
@@ -268,6 +277,34 @@ export class OutstandingComponent implements OnInit, OnDestroy {
     this.dialog.open( NotesDialogComponent, {
       width: '600px',
       data: { folderName: folder.name },
+    });
+  }
+
+
+  /**
+   * Open the Kdenlive project creation dialog for a folder.
+   *
+   * @param folder - the folder to create a Kdenlive project for
+   */
+  openKdenlive( folder: FolderInfo ): void {
+    this.dialog.open( KdenliveDialogComponent, {
+      width: '550px',
+      data: { folderName: folder.name },
+    }).afterClosed().subscribe( ( created ) => {
+      if ( created ) this.loadFolders();
+    });
+  }
+
+
+  /**
+   * Approve a Kdenlive project and queue a transcode job.
+   *
+   * @param folder - the folder with a Kdenlive project to approve
+   */
+  approveKdenlive( folder: FolderInfo ): void {
+    this.http.post<{ ok: boolean; jobId: number }>( `/api/folders/${ folder.name }/approve-kdenlive`, {} ).subscribe({
+      next: () => this.loadFolders(),
+      error: ( err ) => console.error( 'Failed to approve Kdenlive:', err ),
     });
   }
 

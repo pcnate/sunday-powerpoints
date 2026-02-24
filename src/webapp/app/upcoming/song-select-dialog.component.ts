@@ -161,14 +161,16 @@ interface DialogData {
     }
 
     mat-dialog-content {
-      min-width: 700px;
-      max-width: 900px;
-      overflow: visible;
+      overflow-x: hidden;
+    }
+
+    .filter-row {
+      flex-wrap: wrap;
     }
 
     .table-container {
       max-height: 400px;
-      overflow-y: auto;
+      overflow: auto;
       border: 1px solid #495057;
       border-radius: 4px;
     }
@@ -176,6 +178,12 @@ interface DialogData {
     .select-table {
       width: 100%;
     }
+
+    .select-table .mat-column-number { white-space: nowrap; width: 70px; }
+    .select-table .mat-column-book { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .select-table .mat-column-lastUsed { white-space: nowrap; width: 95px; }
+    .select-table .mat-column-totalUsed { text-align: center; width: 50px; }
+    .select-table .mat-column-action { width: 75px; }
 
     .clickable-row {
       cursor: pointer;

@@ -132,18 +132,20 @@ export async function findOrCreateSong( name: string, number?: string, book?: st
  * @param sundayDate - YYYYMMDD for songs/choruses, YYYYMM for closing songs
  * @param slotType - 'song', 'chorus', or 'closing'
  * @param slotNumber - slot number (1-3 for songs, 1-N for choruses, 1 for closing)
+ * @param slotSuffix - optional letter suffix for split slots (e.g., 'a', 'b')
  */
 export async function recordSongSelection(
   songId: number,
   sundayDate: string,
   slotType: 'song' | 'chorus' | 'closing',
-  slotNumber: number
+  slotNumber: number,
+  slotSuffix?: string
 ): Promise<void> {
   const pool = getPool();
-  await removeSongSelection( sundayDate, slotType, slotNumber );
+  await removeSongSelection( sundayDate, slotType, slotNumber, slotSuffix );
   await pool.query(
-    'INSERT INTO song_selections (song_id, sunday_date, slot_type, slot_number) VALUES (?, ?, ?, ?)',
-    [ songId, sundayDate, slotType, slotNumber ]
+    'INSERT INTO song_selections (song_id, sunday_date, slot_type, slot_number, slot_suffix) VALUES (?, ?, ?, ?, ?)',
+    [ songId, sundayDate, slotType, slotNumber, slotSuffix || null ]
   );
 }
 
@@ -154,17 +156,26 @@ export async function recordSongSelection(
  * @param sundayDate - YYYYMMDD or YYYYMM
  * @param slotType - 'song', 'chorus', or 'closing'
  * @param slotNumber - slot number
+ * @param slotSuffix - optional letter suffix for split slots (e.g., 'a', 'b')
  */
 export async function removeSongSelection(
   sundayDate: string,
   slotType: 'song' | 'chorus' | 'closing',
-  slotNumber: number
+  slotNumber: number,
+  slotSuffix?: string
 ): Promise<void> {
   const pool = getPool();
-  await pool.query(
-    'UPDATE song_selections SET removed_at = NOW() WHERE sunday_date = ? AND slot_type = ? AND slot_number = ? AND removed_at IS NULL',
-    [ sundayDate, slotType, slotNumber ]
-  );
+  if ( slotSuffix ) {
+    await pool.query(
+      'UPDATE song_selections SET removed_at = NOW() WHERE sunday_date = ? AND slot_type = ? AND slot_number = ? AND slot_suffix = ? AND removed_at IS NULL',
+      [ sundayDate, slotType, slotNumber, slotSuffix ]
+    );
+  } else {
+    await pool.query(
+      'UPDATE song_selections SET removed_at = NOW() WHERE sunday_date = ? AND slot_type = ? AND slot_number = ? AND slot_suffix IS NULL AND removed_at IS NULL',
+      [ sundayDate, slotType, slotNumber ]
+    );
+  }
 }
 
 
@@ -242,19 +253,29 @@ export async function setClosingSong(
  * @param sundayDate - YYYYMMDD or YYYYMM
  * @param slotType - 'song', 'chorus', or 'closing'
  * @param slotNumber - slot number
+ * @param slotSuffix - optional letter suffix for split slots (e.g., 'a', 'b')
  * @returns true if an active (non-removed) selection exists
  */
 async function hasActiveSelection(
   sundayDate: string,
   slotType: 'song' | 'chorus' | 'closing',
-  slotNumber: number
+  slotNumber: number,
+  slotSuffix?: string
 ): Promise<boolean> {
   const pool = getPool();
-  const [ rows ] = await pool.query<RowDataPacket[]>(
-    'SELECT 1 FROM song_selections WHERE sunday_date = ? AND slot_type = ? AND slot_number = ? AND removed_at IS NULL LIMIT 1',
-    [ sundayDate, slotType, slotNumber ]
-  );
-  return rows.length > 0;
+  if ( slotSuffix ) {
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT 1 FROM song_selections WHERE sunday_date = ? AND slot_type = ? AND slot_number = ? AND slot_suffix = ? AND removed_at IS NULL LIMIT 1',
+      [ sundayDate, slotType, slotNumber, slotSuffix ]
+    );
+    return rows.length > 0;
+  } else {
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT 1 FROM song_selections WHERE sunday_date = ? AND slot_type = ? AND slot_number = ? AND slot_suffix IS NULL AND removed_at IS NULL LIMIT 1',
+      [ sundayDate, slotType, slotNumber ]
+    );
+    return rows.length > 0;
+  }
 }
 
 
@@ -264,6 +285,7 @@ async function hasActiveSelection(
 export interface ShortcutInfo {
   slotType: 'song' | 'chorus' | 'closing';
   slotNumber: number;
+  slotSuffix?: string;
   songName: string;
   songNumber?: string;
 }
@@ -297,14 +319,15 @@ export function parseShortcutFilename( filename: string ): ShortcutInfo | null {
     };
   }
 
-  // Song: "song N [number - ] name"
-  const songMatch = base.match( /^song\s+(\d+)\s+(?:(\d+)\s*-\s*)?(.+)$/i );
+  // Song: "song N[a-z] [number - ] name" (optional letter suffix for split slots)
+  const songMatch = base.match( /^song\s+(\d+)([a-z])?\s+(?:(\d+)\s*-\s*)?(.+)$/i );
   if ( songMatch ) {
     return {
       slotType: 'song',
       slotNumber: parseInt( songMatch[ 1 ] ),
-      songName: songMatch[ 3 ].trim(),
-      songNumber: songMatch[ 2 ] || undefined,
+      slotSuffix: songMatch[ 2 ]?.toLowerCase() || undefined,
+      songName: songMatch[ 4 ].trim(),
+      songNumber: songMatch[ 3 ] || undefined,
     };
   }
 
@@ -329,6 +352,7 @@ export function parseShortcutFilename( filename: string ): ShortcutInfo | null {
 export interface FolderSongInfo {
   slotType: 'song' | 'chorus' | 'closing';
   slotNumber: number;
+  slotSuffix?: string;
   name: string;
   number?: string;
   book?: string;
@@ -375,7 +399,7 @@ export async function syncSelectionsFromFolder(
       : sundayDate;
 
     // Skip if already tracked
-    const exists = await hasActiveSelection( dateKey, info.slotType, info.slotNumber );
+    const exists = await hasActiveSelection( dateKey, info.slotType, info.slotNumber, info.slotSuffix );
     if ( exists ) continue;
 
     // Extract relative file path if we have a target and songs directory
@@ -385,6 +409,6 @@ export async function syncSelectionsFromFolder(
 
     // Find or create the song, then record the selection
     const songId = await findOrCreateSong( info.name, info.number, info.book, filePath );
-    await recordSongSelection( songId, dateKey, info.slotType, info.slotNumber );
+    await recordSongSelection( songId, dateKey, info.slotType, info.slotNumber, info.slotSuffix );
   }
 }
