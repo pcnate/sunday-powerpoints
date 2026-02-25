@@ -21,6 +21,7 @@ interface LibrarySong {
   name: string;
   number?: string;
   book?: string;
+  bookIcon?: string;
   lastModified?: string;
   lastUsed?: string;
   totalUsed?: number;
@@ -76,6 +77,7 @@ interface DialogData {
           <mat-select [(ngModel)]="selectedBook" (selectionChange)="applyFilters()">
             <mat-option value="">All Books/Sources ({{ songs.length }})</mat-option>
             <mat-option *ngFor="let b of books" [value]="b.name">
+              <img *ngIf="b.icon" [src]="'/api/books/icons/' + b.icon" class="book-icon" alt="" />
               {{ b.name }} ({{ b.count }})
             </mat-option>
           </mat-select>
@@ -103,7 +105,12 @@ interface DialogData {
 
           <ng-container matColumnDef="book">
             <th mat-header-cell *matHeaderCellDef>Book</th>
-            <td mat-cell *matCellDef="let song">{{ song.book || '' }}</td>
+            <td mat-cell *matCellDef="let song">
+              <span class="book-cell">
+                <img *ngIf="song.bookIcon" [src]="'/api/books/icons/' + song.bookIcon" class="book-icon" alt="" />
+                {{ song.book || '' }}
+              </span>
+            </td>
           </ng-container>
 
           <ng-container matColumnDef="lastUsed">
@@ -207,13 +214,26 @@ interface DialogData {
     .action-spacer {
       flex: 1;
     }
+
+    .book-icon {
+      width: 20px;
+      height: 20px;
+      object-fit: contain;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    .book-cell {
+      display: inline-flex;
+      align-items: center;
+    }
   `]
 })
 export class SongSelectDialogComponent implements OnInit {
 
   songs: LibrarySong[] = [];
   filteredSongs: LibrarySong[] = [];
-  books: { name: string; count: number }[] = [];
+  books: { name: string; count: number; icon?: string }[] = [];
   searchText = '';
   selectedBook = '';
   loading = true;
@@ -255,12 +275,16 @@ export class SongSelectDialogComponent implements OnInit {
    */
   private buildBookList(): void {
     const counts = new Map<string, number>();
+    const icons = new Map<string, string>();
     for ( const song of this.songs ) {
       const book = song.book || 'Unknown';
       counts.set( book, ( counts.get( book ) || 0 ) + 1 );
+      if ( song.bookIcon && !icons.has( book ) ) {
+        icons.set( book, song.bookIcon );
+      }
     }
     this.books = Array.from( counts.entries() )
-      .map( ([ name, count ]) => ({ name, count }) )
+      .map( ([ name, count ]) => ({ name, count, icon: icons.get( name ) }) )
       .sort( ( a, b ) => a.name.localeCompare( b.name ) );
   }
 
@@ -298,10 +322,10 @@ export class SongSelectDialogComponent implements OnInit {
 
 
   /**
-   * Clear the slot by returning an empty object.
+   * Clear the slot by returning null.
    */
   clear(): void {
-    this.dialogRef.close({ name: '', number: '' });
+    this.dialogRef.close( null );
   }
 
 

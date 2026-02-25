@@ -2,16 +2,17 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { MatTableModule } from '@angular/material/table';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatIconModule } from '@angular/material/icon';
-import { MatSortModule, Sort } from '@angular/material/sort';
 import { MatSelectModule } from '@angular/material/select';
 import { MatButtonModule } from '@angular/material/button';
-import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { AgGridAngular } from 'ag-grid-angular';
+import { AllCommunityModule, ColDef, colorSchemeDark, GridApi, GridReadyEvent, ICellRendererParams, ModuleRegistry, RowClickedEvent, themeQuartz, ValueFormatterParams } from 'ag-grid-community';
 import { CreateSongDialogComponent } from './create-song-dialog.component';
+
+ModuleRegistry.registerModules([ AllCommunityModule ]);
 import { SongDetailDialogComponent, SongDetailDialogData } from './song-detail-dialog.component';
 
 
@@ -22,6 +23,8 @@ interface Song {
   name: string;
   number?: string;
   book?: string;
+  bookIcon?: string;
+  filePath?: string;
   lastModified?: string;
   ccli?: string;
   lastUsed?: string;
@@ -30,7 +33,7 @@ interface Song {
 
 
 /**
- * Song Library component — searchable table of all available songs.
+ * Song Library component — searchable AG Grid table of all available songs.
  */
 @Component({
   selector: 'app-library',
@@ -38,15 +41,13 @@ interface Song {
   imports: [
     CommonModule,
     FormsModule,
-    MatTableModule,
     MatFormFieldModule,
     MatInputModule,
     MatIconModule,
-    MatSortModule,
     MatSelectModule,
     MatButtonModule,
-    MatProgressSpinnerModule,
     MatDialogModule,
+    AgGridAngular,
   ],
   templateUrl: './library.component.html',
   styleUrls: [ './library.component.scss' ]
@@ -55,12 +56,109 @@ export class LibraryComponent implements OnInit {
 
   songs: Song[] = [];
   filteredSongs: Song[] = [];
-  books: { name: string; count: number }[] = [];
+  books: { name: string; count: number; icon?: string }[] = [];
   searchText = '';
   selectedBook = '';
   loading = true;
 
-  displayedColumns = [ 'number', 'name', 'book', 'ccli', 'lastUsed', 'totalUsed' ];
+  /**
+   * AG Grid dark theme matching the app's Bootstrap-dark palette.
+   */
+  gridTheme = themeQuartz.withPart( colorSchemeDark ).withParams({
+    backgroundColor: '#212529',
+    headerBackgroundColor: '#1a1d21',
+    oddRowBackgroundColor: '#212529',
+    rowHoverColor: 'rgba( 110, 168, 254, 0.06 )',
+    selectedRowBackgroundColor: 'rgba( 110, 168, 254, 0.12 )',
+    borderColor: '#495057',
+    headerTextColor: '#ffffff',
+    foregroundColor: '#dee2e6',
+    rangeSelectionBorderColor: '#6ea8fe',
+    fontFamily: 'Roboto, "Helvetica Neue", sans-serif',
+    fontSize: 14,
+    iconColor: '#adb5bd',
+    wrapperBorderRadius: '0px',
+    wrapperBorder: false,
+  });
+
+  private gridApi!: GridApi;
+
+
+  /**
+   * AG Grid column definitions.
+   */
+  columnDefs: ColDef[] = [
+    {
+      field: 'book',
+      headerName: 'Book',
+      flex: 1,
+      minWidth: 120,
+      cellRenderer: ( params: ICellRendererParams ) => {
+        const name = params.value || '-';
+        const icon = params.data?.bookIcon;
+        if ( icon ) {
+          return `<span class="book-cell"><img src="/api/books/icons/${ icon }" class="book-icon" alt="" />${ name }</span>`;
+        }
+        return name;
+      },
+    },
+    {
+      field: 'number',
+      headerName: '#',
+      width: 80,
+      valueFormatter: ( params: ValueFormatterParams ) => params.value || '-',
+    },
+    {
+      field: 'name',
+      headerName: 'Name',
+      flex: 2,
+      minWidth: 200,
+    },
+    {
+      field: 'ccli',
+      headerName: 'CCLI',
+      width: 120,
+      cellRenderer: ( params: ICellRendererParams ) => {
+        if ( !params.value ) return '';
+        return `<a class="ccli-link" href="https://songselect.ccli.com/songs/${ params.value }" target="_blank" rel="noopener">${ params.value }</a>`;
+      },
+      cellClass: ( params ) => params.value ? 'ccli-populated' : 'ccli-missing',
+    },
+    {
+      field: 'lastUsed',
+      headerName: 'Last Used',
+      width: 150,
+      valueFormatter: ( params: ValueFormatterParams ) => this.formatDate( params.value ),
+      comparator: ( valueA: string, valueB: string ) => {
+        const a = padDate( valueA );
+        const b = padDate( valueB );
+        if ( a === b ) return 0;
+        return a < b ? -1 : 1;
+      },
+    },
+    {
+      field: 'totalUsed',
+      headerName: 'Used',
+      width: 90,
+      valueFormatter: ( params: ValueFormatterParams ) => params.value ?? 0,
+    },
+  ];
+
+
+  /**
+   * Default column settings applied to all columns.
+   */
+  defaultColDef: ColDef = {
+    sortable: true,
+    resizable: true,
+    filter: true,
+  };
+
+
+  /**
+   * Overlay template shown when the grid has no rows.
+   */
+  noRowsTemplate = '<span style="color: #6c757d; font-size: 0.95rem;">No songs found in library</span>';
 
 
   constructor(
@@ -84,7 +182,7 @@ export class LibraryComponent implements OnInit {
     this.loading = true;
     this.http.get<Song[]>( '/api/songs' ).subscribe({
       next: ( data ) => {
-        this.songs = data.sort( ( a, b ) => a.name.localeCompare( b.name ) );
+        this.songs = data; // server sorts by book → number → name
         this.filteredSongs = this.songs;
         this.buildBookList();
         this.filterSongs();
@@ -100,12 +198,16 @@ export class LibraryComponent implements OnInit {
    */
   private buildBookList(): void {
     const counts = new Map<string, number>();
+    const icons = new Map<string, string>();
     for ( const song of this.songs ) {
       const book = song.book || 'Unknown';
       counts.set( book, ( counts.get( book ) || 0 ) + 1 );
+      if ( song.bookIcon && !icons.has( book ) ) {
+        icons.set( book, song.bookIcon );
+      }
     }
     this.books = Array.from( counts.entries() )
-      .map( ([ name, count ]) => ({ name, count }) )
+      .map( ([ name, count ]) => ({ name, count, icon: icons.get( name ) }) )
       .sort( ( a, b ) => a.name.localeCompare( b.name ) );
   }
 
@@ -133,32 +235,6 @@ export class LibraryComponent implements OnInit {
 
 
   /**
-   * Sort the table by column.
-   *
-   * @param sort - the sort event from MatSort
-   */
-  sortData( sort: Sort ): void {
-    if ( !sort.active || sort.direction === '' ) {
-      this.filteredSongs = [ ...this.filteredSongs ];
-      return;
-    }
-
-    this.filteredSongs = [ ...this.filteredSongs ].sort( ( a, b ) => {
-      const isAsc = sort.direction === 'asc';
-      switch ( sort.active ) {
-        case 'number': return compare( a.number || '', b.number || '', isAsc );
-        case 'name': return compare( a.name, b.name, isAsc );
-        case 'book': return compare( a.book || '', b.book || '', isAsc );
-        case 'ccli': return compare( a.ccli || '', b.ccli || '', isAsc );
-        case 'lastUsed': return compare( padDate( a.lastUsed ), padDate( b.lastUsed ), isAsc );
-        case 'totalUsed': return compareNum( a.totalUsed || 0, b.totalUsed || 0, isAsc );
-        default: return 0;
-      }
-    });
-  }
-
-
-  /**
    * Format a YYYYMMDD or YYYYMM string into a short readable date.
    *
    * @param dateStr - YYYYMMDD or YYYYMM format, or undefined
@@ -173,6 +249,32 @@ export class LibraryComponent implements OnInit {
     }
     const d = parseInt( dateStr.slice( 6, 8 ) );
     return new Date( y, m, d ).toLocaleDateString( 'en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+
+  /**
+   * Store grid API reference when grid is ready.
+   *
+   * @param event - grid ready event
+   */
+  onGridReady( event: GridReadyEvent ): void {
+    this.gridApi = event.api;
+  }
+
+
+  /**
+   * Handle row click — open song detail dialog.
+   *
+   * @param event - AG Grid row clicked event
+   */
+  onRowClicked( event: RowClickedEvent ): void {
+    // Don't open the dialog when the user clicks a link (e.g. CCLI)
+    const target = event.event?.target as HTMLElement | undefined;
+    if ( target?.tagName === 'A' ) return;
+
+    if ( event.data ) {
+      this.openSongDetail( event.data );
+    }
   }
 
 
@@ -198,45 +300,27 @@ export class LibraryComponent implements OnInit {
    * @param song - the song row that was clicked
    */
   openSongDetail( song: Song ): void {
-    this.dialog.open( SongDetailDialogComponent, {
+    const dialogRef = this.dialog.open( SongDetailDialogComponent, {
       width: '550px',
       maxHeight: '80vh',
       data: {
         name: song.name,
         number: song.number,
         book: song.book,
+        bookIcon: song.bookIcon,
+        filePath: song.filePath,
         ccli: song.ccli,
         lastUsed: song.lastUsed,
         totalUsed: song.totalUsed,
       } as SongDetailDialogData,
     });
+
+    dialogRef.afterClosed().subscribe( ( result: { ccli: string | null; license: string | null } | undefined ) => {
+      if ( !result ) return;
+      song.ccli = result.ccli || undefined;
+      this.gridApi.refreshCells({ columns: [ 'ccli' ] });
+    });
   }
-}
-
-
-/**
- * Compare two string values for sorting.
- *
- * @param a - first value
- * @param b - second value
- * @param isAsc - ascending order
- * @returns comparison result
- */
-function compare( a: string, b: string, isAsc: boolean ): number {
-  return ( a < b ? -1 : 1 ) * ( isAsc ? 1 : -1 );
-}
-
-
-/**
- * Compare two numeric values for sorting.
- *
- * @param a - first value
- * @param b - second value
- * @param isAsc - ascending order
- * @returns comparison result
- */
-function compareNum( a: number, b: number, isAsc: boolean ): number {
-  return ( a - b ) * ( isAsc ? 1 : -1 );
 }
 
 

@@ -65,6 +65,7 @@
           <mat-card-title>{{ week.label }}</mat-card-title>
           <mat-card-subtitle>
             {{ week.date }}
+            <span class="folder-badge approved" *ngIf="week.folder?.isApproved && !isPastSunday( week.date )">Ready</span>
             <span class="folder-badge backlog" *ngIf="week.folder?.backlog">Backlog</span>
             <span class="folder-badge archived" *ngIf="week.folder?.archived">Archived</span>
           </mat-card-subtitle>
@@ -98,7 +99,7 @@
               <mat-icon class="status-icon">more_vert</mat-icon>
             </button>
             <mat-menu #cardMenu="matMenu">
-              <button mat-menu-item *ngIf="isPastSunday( week.date )"
+              <button mat-menu-item *ngIf="isPastSunday( week.date ) || week.folder?.isApproved"
                       (click)="toggleEditPastWeek( week )">
                 <mat-icon>{{ isWeekLocked( week ) ? 'edit' : 'edit_off' }}</mat-icon>
                 <span>{{ isWeekLocked( week ) ? 'Enable editing' : 'Lock editing' }}</span>
@@ -124,6 +125,12 @@
                 <mat-icon>movie</mat-icon>
                 <span>Queue Transcode</span>
               </button>
+              <button mat-menu-item
+                      *ngIf="week.folder?.isApproved && !isPastSunday( week.date )"
+                      (click)="cancelApproval( week )">
+                <mat-icon>undo</mat-icon>
+                <span>Cancel approval</span>
+              </button>
             </mat-menu>
           </div>
         </mat-card-header>
@@ -137,9 +144,24 @@
             <span class="slot-label">Chorus {{ ci + 1 }}</span>
             <button mat-stroked-button class="chorus-button"
                     [disabled]="isWeekLocked( week )"
-                    (click)="editChorus( wi, ci )">
+                    (click)="openSongDetail( c )">
               {{ songDisplay( c ) }}
             </button>
+            <button mat-icon-button class="slot-menu-button"
+                    [matMenuTriggerFor]="chorusMenu"
+                    [disabled]="isWeekLocked( week )">
+              <mat-icon>more_vert</mat-icon>
+            </button>
+            <mat-menu #chorusMenu="matMenu">
+              <button mat-menu-item (click)="editChorus( wi, ci )">
+                <mat-icon>swap_horiz</mat-icon>
+                <span>Change chorus</span>
+              </button>
+              <button mat-menu-item (click)="removeChorus( wi, ci )">
+                <mat-icon>delete</mat-icon>
+                <span>Remove chorus</span>
+              </button>
+            </mat-menu>
           </div>
         </div>
         <button mat-stroked-button class="add-chorus-button"
@@ -160,7 +182,9 @@
           <ng-container *ngFor="let slotId of getSongSlots( week )">
             <ng-container *ngIf="getBaseSlot( slotId ) === 1">
               <div class="song-slot" [matTooltip]="week.selection?.songs?.[slotId]?.shortcut || ''">
-                <span class="slot-label">{{ slotLabel( slotId ) }}</span>
+                <span class="slot-label"
+                      [class.no-ccli]="week.selection?.songs?.[slotId] && !week.selection?.songs?.[slotId]?.ccli"
+                      [matTooltip]="week.selection?.songs?.[slotId] && !week.selection?.songs?.[slotId]?.ccli ? 'Missing CCLI license' : ''">{{ slotLabel( slotId ) }}</span>
                 <div class="skeleton-bar" *ngIf="loading; else slotLoaded1">
                   <div class="skeleton-shimmer"></div>
                 </div>
@@ -168,7 +192,7 @@
                   <button mat-stroked-button class="song-button"
                           [class.empty]="!week.selection?.songs?.[slotId]"
                           [disabled]="isWeekLocked( week )"
-                          (click)="selectSong( wi, slotId )">
+                          (click)="week.selection?.songs?.[slotId] ? openSongDetail( week.selection!.songs![slotId]! ) : selectSong( wi, slotId )">
                     <mat-icon *ngIf="!week.selection?.songs?.[slotId]">add</mat-icon>
                     {{ songDisplay( week.selection?.songs?.[slotId] ?? null ) }}
                   </button>
@@ -179,6 +203,15 @@
                   <mat-icon>more_vert</mat-icon>
                 </button>
                 <mat-menu #slotMenu1="matMenu">
+                  <button mat-menu-item (click)="selectSong( wi, slotId )">
+                    <mat-icon>swap_horiz</mat-icon>
+                    <span>Change song</span>
+                  </button>
+                  <button mat-menu-item *ngIf="week.selection?.songs?.[slotId]"
+                          (click)="clearSong( wi, slotId )">
+                    <mat-icon>delete</mat-icon>
+                    <span>Remove song</span>
+                  </button>
                   <button mat-menu-item *ngIf="!isSlotSplit( week, 1 )"
                           (click)="splitSlot( wi, 1 )">
                     <mat-icon>call_split</mat-icon>
@@ -221,7 +254,9 @@
           <ng-container *ngFor="let slotId of getSongSlots( week )">
             <ng-container *ngIf="getBaseSlot( slotId ) === 2">
               <div class="song-slot" [matTooltip]="week.selection?.songs?.[slotId]?.shortcut || ''">
-                <span class="slot-label">{{ slotLabel( slotId ) }}</span>
+                <span class="slot-label"
+                      [class.no-ccli]="week.selection?.songs?.[slotId] && !week.selection?.songs?.[slotId]?.ccli"
+                      [matTooltip]="week.selection?.songs?.[slotId] && !week.selection?.songs?.[slotId]?.ccli ? 'Missing CCLI license' : ''">{{ slotLabel( slotId ) }}</span>
                 <div class="skeleton-bar" *ngIf="loading; else slotLoaded2">
                   <div class="skeleton-shimmer"></div>
                 </div>
@@ -229,7 +264,7 @@
                   <button mat-stroked-button class="song-button"
                           [class.empty]="!week.selection?.songs?.[slotId]"
                           [disabled]="isWeekLocked( week )"
-                          (click)="selectSong( wi, slotId )">
+                          (click)="week.selection?.songs?.[slotId] ? openSongDetail( week.selection!.songs![slotId]! ) : selectSong( wi, slotId )">
                     <mat-icon *ngIf="!week.selection?.songs?.[slotId]">add</mat-icon>
                     {{ songDisplay( week.selection?.songs?.[slotId] ?? null ) }}
                   </button>
@@ -240,6 +275,15 @@
                   <mat-icon>more_vert</mat-icon>
                 </button>
                 <mat-menu #slotMenu2="matMenu">
+                  <button mat-menu-item (click)="selectSong( wi, slotId )">
+                    <mat-icon>swap_horiz</mat-icon>
+                    <span>Change song</span>
+                  </button>
+                  <button mat-menu-item *ngIf="week.selection?.songs?.[slotId]"
+                          (click)="clearSong( wi, slotId )">
+                    <mat-icon>delete</mat-icon>
+                    <span>Remove song</span>
+                  </button>
                   <button mat-menu-item *ngIf="!isSlotSplit( week, 2 )"
                           (click)="splitSlot( wi, 2 )">
                     <mat-icon>call_split</mat-icon>
@@ -288,7 +332,9 @@
           <ng-container *ngFor="let slotId of getSongSlots( week )">
             <ng-container *ngIf="getBaseSlot( slotId ) === 3">
               <div class="song-slot" [matTooltip]="week.selection?.songs?.[slotId]?.shortcut || ''">
-                <span class="slot-label">{{ slotLabel( slotId ) }}</span>
+                <span class="slot-label"
+                      [class.no-ccli]="week.selection?.songs?.[slotId] && !week.selection?.songs?.[slotId]?.ccli"
+                      [matTooltip]="week.selection?.songs?.[slotId] && !week.selection?.songs?.[slotId]?.ccli ? 'Missing CCLI license' : ''">{{ slotLabel( slotId ) }}</span>
                 <div class="skeleton-bar" *ngIf="loading; else slotLoaded3">
                   <div class="skeleton-shimmer"></div>
                 </div>
@@ -296,7 +342,7 @@
                   <button mat-stroked-button class="song-button"
                           [class.empty]="!week.selection?.songs?.[slotId]"
                           [disabled]="isWeekLocked( week )"
-                          (click)="selectSong( wi, slotId )">
+                          (click)="week.selection?.songs?.[slotId] ? openSongDetail( week.selection!.songs![slotId]! ) : selectSong( wi, slotId )">
                     <mat-icon *ngIf="!week.selection?.songs?.[slotId]">add</mat-icon>
                     {{ songDisplay( week.selection?.songs?.[slotId] ?? null ) }}
                   </button>
@@ -307,6 +353,15 @@
                   <mat-icon>more_vert</mat-icon>
                 </button>
                 <mat-menu #slotMenu3="matMenu">
+                  <button mat-menu-item (click)="selectSong( wi, slotId )">
+                    <mat-icon>swap_horiz</mat-icon>
+                    <span>Change song</span>
+                  </button>
+                  <button mat-menu-item *ngIf="week.selection?.songs?.[slotId]"
+                          (click)="clearSong( wi, slotId )">
+                    <mat-icon>delete</mat-icon>
+                    <span>Remove song</span>
+                  </button>
                   <button mat-menu-item *ngIf="!isSlotSplit( week, 3 )"
                           (click)="splitSlot( wi, 3 )">
                     <mat-icon>call_split</mat-icon>

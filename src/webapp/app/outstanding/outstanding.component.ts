@@ -23,6 +23,7 @@ interface RawFolder {
   isApproved: boolean;
   hasMp4: boolean;
   hasVideo: boolean;
+  hasThumbnail: boolean;
   thumbnail: string | null;
   videoFileName: string | null;
   hasSong1: boolean;
@@ -162,6 +163,7 @@ export class OutstandingComponent implements OnInit, OnDestroy {
       const stage1 = [
         ...songChecks,
         { key: 'Presentation', has: f.hasPre },
+        { key: 'Approval', has: !f.hasPre || f.isApproved },
       ];
 
       // Stage 2: post-service pipeline (only for past dates with complete Stage 1)
@@ -175,7 +177,7 @@ export class OutstandingComponent implements OnInit, OnDestroy {
       ];
 
       const stage1Complete = stage1.every( ( c ) => c.has );
-      const includeStage2 = ( isPast && stage1Complete ) || f.hasVideo;
+      const includeStage2 = ( isPast && stage1Complete ) || f.hasVideo || f.hasThumbnail;
       const checks = includeStage2 ? [ ...stage1, ...stage2 ] : stage1;
       const completionCount = checks.filter( ( c ) => c.has ).length;
       const totalItems = checks.length;

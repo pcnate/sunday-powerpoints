@@ -42,6 +42,8 @@
     "@angular/material": "^20.0.5",
     "@angular/platform-browser": "^20.0.6",
     "@angular/router": "^20.0.6",
+    "ag-grid-angular": "^35.1.0",
+    "ag-grid-community": "^35.1.0",
     "await-to-js": "^3.0.0",
     "bootstrap": "^5.3.6",
     "dotenv": "^16.5.0",

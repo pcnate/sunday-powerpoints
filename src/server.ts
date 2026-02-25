@@ -275,16 +275,16 @@ class SundayFolder {
       const stat = await fs.promises.stat( videoPath );
 
       if ( stat.isFile() ) {
-        // if the video is a thm or jpeg file then it is the thumbnail
+        // if the video is a thm file, rename to jpeg and use as thumbnail
         if ( videoFile.toLocaleLowerCase().endsWith( '.thm' ) ) {
-          // rename the file to a jpeg file
           const newPath = videoPath.replace( /\.thm$/i, '.jpeg' );
           await fs.promises.rename( videoPath, newPath );
           this.thumbnail = newPath;
           changes = true;
-        } else
-        
-        // add the video file to the list
+          continue;
+        }
+
+        // jpeg thumbnails — set as thumbnail and skip addVideo
         if ( videoFile.toLowerCase().endsWith( '.jpeg' ) ) {
           if ( this.thumbnail !== videoPath ) {
             this.thumbnail = videoPath;
@@ -292,6 +292,7 @@ class SundayFolder {
           }
           continue;
         }
+
         this.addVideo( videoPath );
       }
     }
@@ -845,8 +846,18 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
       const mp4File = vidsFiles.find( f => f.toLowerCase().endsWith( '.mp4' ) );
       videoFileName = mp4File ? toRelativePath( path.join( vidsPath, mp4File ) ) : null;
     }
-    const thumbFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.jpeg' ) || f.toLowerCase().endsWith( '.thm' ) );
-    if ( thumbFile ) {
+    // Auto-rename .thm → .jpeg when found
+    const thmFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.thm' ) );
+    if ( thmFile ) {
+      const thmPath = path.join( vidsPath, thmFile );
+      const jpegPath = thmPath.replace( /\.thm$/i, '.jpeg' );
+      try {
+        await fs.promises.rename( thmPath, jpegPath );
+        console.log( `[THM] Renamed ${ thmFile } → ${ path.basename( jpegPath ) } in ${ folderName }` );
+      } catch {}
+    }
+    const hasJpeg = vidsFiles.some( f => f.toLowerCase().endsWith( '.jpeg' ) ) || !!thmFile;
+    if ( hasJpeg ) {
       thumbnail = `/api/thumbnail/${ encodeURIComponent( folderName ) }`;
     }
     // Pipeline: check for production MP4, transcription VTT, and Kdenlive project in Vids/
@@ -856,6 +867,7 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
   } catch {}
 
   const hasVideo = hasMp4 || hasMkv;
+  const hasThumbnail = !!thumbnail;
 
   let hasSong1 = false, hasSong2 = false, hasSong3 = false;
   let hasSermonMd = false;
@@ -886,6 +898,7 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     hasMp4,
     hasMkv,
     hasVideo,
+    hasThumbnail,
     thumbnail,
     videoFileName,
     hasSong1,
@@ -1503,6 +1516,43 @@ app.put( '/api/folders/:name/approve', async ( req: Request, res: Response ) => 
 
 
 /**
+ * Cancel approval of a presentation by adding "TODO" back to the shortcut filename.
+ * Renames "YYYY-MM-DD.lnk" → "YYYY-MM-DD TODO.lnk" in the template directory.
+ */
+app.put( '/api/folders/:name/unapprove', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const dateStr = folderName.replace( /(\d{4})(\d{2})(\d{2})/, '$1-$2-$3' );
+  const doneLnk = `${ dateStr }.lnk`;
+  const todoLnk = `${ dateStr } TODO.lnk`;
+  const oldPath = path.join( config.templateDirectory, doneLnk );
+  const newPath = path.join( config.templateDirectory, todoLnk );
+
+  try {
+    await fs.promises.access( oldPath );
+  } catch {
+    // No approved shortcut — already unapproved or missing
+    res.json({ ok: true, message: 'Already unapproved' });
+    return;
+  }
+
+  try {
+    await fs.promises.rename( oldPath, newPath );
+    console.log( `[UNAPPROVE] Renamed "${ doneLnk }" → "${ todoLnk }" in template directory` );
+    io.emit( 'folder-changes', { name: folderName } );
+    res.json({ ok: true, oldName: doneLnk, newName: todoLnk });
+  } catch ( err ) {
+    console.error( `[UNAPPROVE] Failed to rename shortcut for ${ folderName }:`, err );
+    res.status( 500 ).json({ error: 'Failed to rename shortcut' });
+  }
+});
+
+
+/**
  * List video files in a Sunday folder's Vids/ subdirectory.
  * Returns MKV and MP4 files (excluding production MP4s) with file size and type.
  */
@@ -1750,68 +1800,51 @@ app.get( '/api/closing-song', async ( req: Request, res: Response ) => {
 
 
 /**
- * API endpoint to set or clear the closing song for a given month.
- * When set, creates a "closing song" shortcut in every Sunday folder for that month.
+ * API endpoint to set the closing song for a given month.
+ * Creates a "closing song" shortcut in every Sunday folder for that month.
  */
 app.post( '/api/closing-song', ( req: Request, res: Response ) => {
   ( async () => {
     try {
       const { year, month, song } = req.body || {};
-      if ( !year || !month ) {
-        return res.status( 400 ).json({ error: 'Missing year or month' });
+      if ( !year || !month || !song ) {
+        return res.status( 400 ).json({ error: 'Missing year, month, or song' });
       }
 
       // Persist the selection in song_selections
-      await setClosingSong( year, month, song || null );
+      await setClosingSong( year, month, song );
 
       // Create shortcuts in every Sunday folder for this month
-      if ( song ) {
-        const sundays = sundaysInMonth( month, year );
+      const sundays = sundaysInMonth( month, year );
 
-        for ( const day of sundays ) {
-          const mm = String( month ).padStart( 2, '0' );
-          const dd = String( day ).padStart( 2, '0' );
-          const dateStr = `${ year }${ mm }${ dd }`;
-          const weekFolder = await resolveFolderPath( dateStr );
+      for ( const day of sundays ) {
+        const mm = String( month ).padStart( 2, '0' );
+        const dd = String( day ).padStart( 2, '0' );
+        const dateStr = `${ year }${ mm }${ dd }`;
+        const weekFolder = await resolveFolderPath( dateStr );
 
-          if ( !weekFolder ) continue;
+        if ( !weekFolder ) continue;
 
-          // Remove existing closing song shortcuts
-          deleteShortcutsByPrefix( weekFolder, 'closing song ' );
+        // Remove existing closing song shortcuts
+        deleteShortcutsByPrefix( weekFolder, 'closing song ' );
 
-          // Find the song file in the library
-          const songFile = findSongFile( song, config.songsDirectory );
-          if ( !songFile ) {
-            console.log( `[CLOSING SONG] Song file not found in library for ${ song.number || '' } ${ song.name }` );
-            continue;
-          }
-
-          const shortcutName = `closing song ${ song.number ? song.number + ' - ' : '' }${ song.name }`.replace( /[\\/:*?"<>|]/g, '_' ) + ' - Shortcut.lnk';
-          const shortcutPath = path.join( weekFolder, shortcutName );
-          const desc = `Closing Song: ${ song.number ? song.number + ' - ' : '' }${ song.name }`;
-          const rootPath = config.rootPath;
-
-          const created = await createShortcut( shortcutPath, desc, songFile, rootPath );
-          if ( created ) {
-            console.log( `[CLOSING SONG] Created shortcut in ${ dateStr }` );
-          } else {
-            console.error( `[CLOSING SONG] Failed to create shortcut in ${ dateStr }` );
-          }
+        // Find the song file in the library
+        const songFile = findSongFile( song, config.songsDirectory );
+        if ( !songFile ) {
+          console.log( `[CLOSING SONG] Song file not found in library for ${ song.number || '' } ${ song.name }` );
+          continue;
         }
-      } else {
-        // Song cleared — remove closing song shortcuts from all Sunday folders
-        const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
-        const sundays = sundaysInMonth( month, year );
 
-        for ( const day of sundays ) {
-          const mm = String( month ).padStart( 2, '0' );
-          const dd = String( day ).padStart( 2, '0' );
-          const dateStr = `${ year }${ mm }${ dd }`;
-          const weekFolder = path.join( outputDir, dateStr );
+        const shortcutName = `closing song ${ song.number ? song.number + ' - ' : '' }${ song.name }`.replace( /[\\/:*?"<>|]/g, '_' ) + ' - Shortcut.lnk';
+        const shortcutPath = path.join( weekFolder, shortcutName );
+        const desc = `Closing Song: ${ song.number ? song.number + ' - ' : '' }${ song.name }`;
+        const rootPath = config.rootPath;
 
-          if ( fs.existsSync( weekFolder ) ) {
-            deleteShortcutsByPrefix( weekFolder, 'closing song ' );
-          }
+        const created = await createShortcut( shortcutPath, desc, songFile, rootPath );
+        if ( created ) {
+          console.log( `[CLOSING SONG] Created shortcut in ${ dateStr }` );
+        } else {
+          console.error( `[CLOSING SONG] Failed to create shortcut in ${ dateStr }` );
         }
       }
 
@@ -1819,6 +1852,45 @@ app.post( '/api/closing-song', ( req: Request, res: Response ) => {
     } catch ( err ) {
       console.error( '[CLOSING SONG] Error:', err );
       res.status( 500 ).json({ error: 'Failed to save closing song' });
+    }
+  })();
+});
+
+
+/**
+ * API endpoint to clear the closing song for a given month.
+ * Removes the song_selections record and deletes closing song shortcuts from all Sunday folders.
+ */
+app.delete( '/api/closing-song', ( req: Request, res: Response ) => {
+  ( async () => {
+    try {
+      const year = parseInt( req.query.year as string );
+      const month = parseInt( req.query.month as string );
+      if ( !year || !month ) {
+        return res.status( 400 ).json({ error: 'Missing year or month' });
+      }
+
+      // Remove the selection from song_selections
+      await setClosingSong( year, month, null );
+
+      // Remove closing song shortcuts from all Sunday folders
+      const sundays = sundaysInMonth( month, year );
+
+      for ( const day of sundays ) {
+        const mm = String( month ).padStart( 2, '0' );
+        const dd = String( day ).padStart( 2, '0' );
+        const dateStr = `${ year }${ mm }${ dd }`;
+        const weekFolder = await resolveFolderPath( dateStr );
+
+        if ( weekFolder ) {
+          deleteShortcutsByPrefix( weekFolder, 'closing song ' );
+        }
+      }
+
+      res.json({ ok: true });
+    } catch ( err ) {
+      console.error( '[CLOSING SONG] Error clearing:', err );
+      res.status( 500 ).json({ error: 'Failed to clear closing song' });
     }
   })();
 });
@@ -1833,6 +1905,8 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
     name: string;
     number?: string;
     book?: string;
+    bookIcon?: string | null;
+    filePath?: string;
     lastModified?: string;
     ccli?: string;
     lastUsed?: string;
@@ -1873,7 +1947,14 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
         let name = f.replace( /^(\d{3})\s*-?\s*/, '' ).replace( new RegExp( ext + '$', 'i' ), '' );
         // Format last modified date
         const lastModified = stat.mtime.toLocaleString();
-        songFiles.push({ name, number, book, lastModified });
+        // Build path with env variable prefix for easy copy/paste into Run
+        const resolvedRoot = resolveToAbsolutePath( config.rootPath || '%OneDriveConsumer%' ).replace( /\/$/, '' );
+        const normalFull = fullPath.replace( /\//g, '\\' );
+        const normalRoot = resolvedRoot.replace( /\//g, '\\' );
+        const varPath = normalFull.toLowerCase().startsWith( normalRoot.toLowerCase() )
+          ? ( config.rootPath || '%OneDriveConsumer%' ) + normalFull.slice( normalRoot.length )
+          : normalFull;
+        songFiles.push({ name, number, book, filePath: varPath, lastModified });
       }
     }
   }
@@ -1919,6 +2000,42 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
   } catch {
     // DB not available — return songs without stats
   }
+
+  // Attach book icons from the books table
+  try {
+    const pool = getPool();
+    const [ bookRows ] = await pool.query<RowDataPacket[]>(
+      'SELECT name, icon FROM books WHERE enabled = TRUE AND icon IS NOT NULL'
+    );
+    const iconsDir = path.join( config.songsDirectory, 'icons' );
+    const iconMap = new Map<string, string>();
+    for ( const row of bookRows ) {
+      // Only include if the icon file actually exists on disk
+      try {
+        fs.accessSync( path.join( iconsDir, row.icon ) );
+        iconMap.set( row.name.toLowerCase(), row.icon );
+      } catch {
+        // File doesn't exist — skip
+      }
+    }
+    for ( const song of songFiles ) {
+      const icon = iconMap.get( ( song.book || '' ).toLowerCase() );
+      if ( icon ) {
+        song.bookIcon = icon;
+      }
+    }
+  } catch {
+    // DB not available — songs returned without book icons
+  }
+
+  // Sort by book, then song number, then name
+  songFiles.sort( ( a, b ) => {
+    const bookCmp = ( a.book || '' ).localeCompare( b.book || '' );
+    if ( bookCmp !== 0 ) return bookCmp;
+    const numCmp = ( a.number || '' ).localeCompare( b.number || '', undefined, { numeric: true } );
+    if ( numCmp !== 0 ) return numCmp;
+    return a.name.localeCompare( b.name );
+  });
 
   res.json( songFiles );
 });
@@ -1983,10 +2100,12 @@ app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
     // Song not in DB — return empty stats
     if ( songId === null ) {
       res.json({
+        id: null,
         name,
         number: number || null,
         book: book || null,
         ccli: null,
+        license: null,
         totalUsed: 0,
         firstUsed: null,
         lastUsed: null,
@@ -1997,7 +2116,7 @@ app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
 
     // Fetch song details
     const [ songRows ] = await pool.query<RowDataPacket[]>(
-      'SELECT name, number, book, ccli FROM songs WHERE id = ?',
+      'SELECT id, name, number, book, ccli, license FROM songs WHERE id = ?',
       [ songId ]
     );
     const song = songRows[ 0 ];
@@ -2019,15 +2138,55 @@ app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
     }));
 
     res.json({
+      id: song.id,
       name: song.name,
       number: song.number || null,
       book: song.book || null,
       ccli: song.ccli || null,
+      license: song.license || null,
       totalUsed: history.length,
       firstUsed: history.length > 0 ? history[ history.length - 1 ].sundayDate : null,
       lastUsed: history.length > 0 ? history[ 0 ].sundayDate : null,
       history,
     });
+  } catch {
+    res.status( 503 ).json({ error: 'Database not available' });
+  }
+});
+
+
+/**
+ * Update CCLI and/or license on a song.
+ * If id is 0, finds or creates the song record from name/number/book in the body.
+ *
+ * @param id - song primary key (or 0 to find-or-create)
+ * @body ccli - CCLI number (string or null)
+ * @body license - license info (string or null)
+ * @body name - song display name (required when id is 0)
+ * @body number - optional song number (used for find-or-create)
+ * @body book - optional book name (used for find-or-create)
+ */
+app.put( '/api/songs/:id', async ( req: Request, res: Response ) => {
+  const { ccli, license, name, number, book } = req.body || {};
+
+  try {
+    let songId = parseInt( req.params.id );
+
+    // If id is 0 or invalid, find-or-create the song from name/number/book
+    if ( !songId || isNaN( songId ) ) {
+      if ( !name ) {
+        res.status( 400 ).json({ error: 'name is required when song has no id' });
+        return;
+      }
+      songId = await findOrCreateSong( name, number || undefined, book || undefined );
+    }
+
+    const pool = getPool();
+    await pool.query(
+      'UPDATE songs SET ccli = ?, license = ? WHERE id = ?',
+      [ ccli || null, license || null, songId ]
+    );
+    res.json({ ok: true, id: songId });
   } catch {
     res.status( 503 ).json({ error: 'Database not available' });
   }
@@ -2041,9 +2200,24 @@ app.get( '/api/books', async ( _req: Request, res: Response ) => {
   try {
     const pool = getPool();
     const [ rows ] = await pool.query<RowDataPacket[]>(
-      'SELECT id, name FROM books WHERE enabled = TRUE ORDER BY name'
+      'SELECT id, name, icon FROM books WHERE enabled = TRUE ORDER BY name'
     );
-    res.json( rows );
+
+    // Only include icon if the file actually exists on disk
+    const iconsDir = path.join( config.songsDirectory, 'icons' );
+    const booksWithIcons = await Promise.all( rows.map( async ( row ) => {
+      if ( row.icon ) {
+        try {
+          await fs.promises.access( path.join( iconsDir, row.icon ) );
+          return row;
+        } catch {
+          return { ...row, icon: null };
+        }
+      }
+      return row;
+    }) );
+
+    res.json( booksWithIcons );
   } catch {
     // DB not available — fall back to scanning the songs directory
     try {
@@ -2360,6 +2534,61 @@ async function scanFolders() {
 
 
 /**
+ * Cleanup the single oldest MTS file that is older than 6 months.
+ * Runs once per hour. Only deletes one file per invocation for safety.
+ */
+async function cleanupOldestMts() {
+  const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth( sixMonthsAgo.getMonth() - 6 );
+
+  let oldest: { filePath: string; mtime: Date } | null = null;
+
+  // Walk all YYYYMMDD folders (top-level, archived YYYY/, backlog) looking for MTS files
+  for await ( const folder of getSubFolders( outputDir ) ) {
+    const folderName = path.basename( folder );
+
+    // Only look in Vids/ directories
+    if ( folderName !== 'Vids' ) continue;
+
+    let files: string[];
+    try {
+      files = await fs.promises.readdir( folder );
+    } catch {
+      continue;
+    }
+
+    for ( const file of files ) {
+      if ( !file.toLowerCase().endsWith( '.mts' ) ) continue;
+
+      const filePath = path.join( folder, file );
+      try {
+        const stat = await fs.promises.stat( filePath );
+        if ( stat.mtime < sixMonthsAgo ) {
+          if ( !oldest || stat.mtime < oldest.mtime ) {
+            oldest = { filePath, mtime: stat.mtime };
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  if ( oldest ) {
+    try {
+      const ageMs = Date.now() - oldest.mtime.getTime();
+      const ageMonths = Math.round( ageMs / ( 30.44 * 24 * 60 * 60 * 1000 ) );
+      await fs.promises.unlink( oldest.filePath );
+      console.log( `[CLEANUP] Deleted oldest MTS: ${ oldest.filePath } (age: ~${ ageMonths } months)` );
+    } catch ( err ) {
+      console.error( `[CLEANUP] Failed to delete MTS: ${ oldest.filePath }`, err );
+    }
+  }
+}
+
+
+/**
  * Returns song/chorus selections for each week in a given month
  */
 app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
@@ -2479,6 +2708,53 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
       }
       result[ String( weekIdx ) ] = { songs, choruses };
     }
+
+    // Enrich songs and choruses with CCLI from the database
+    try {
+      const pool = getPool();
+      // Collect all unique normalized names across all weeks
+      const nameSet = new Set<string>();
+      for ( const week of Object.values( result ) ) {
+        for ( const song of Object.values( week.songs ) ) {
+          if ( song?.name ) nameSet.add( normalizeSongName( song.name ) );
+        }
+        for ( const chorus of week.choruses ) {
+          if ( chorus?.name ) nameSet.add( normalizeSongName( chorus.name ) );
+        }
+      }
+
+      if ( nameSet.size > 0 ) {
+        const names = Array.from( nameSet );
+        const placeholders = names.map( () => '?' ).join( ', ' );
+        const [ rows ] = await pool.query<RowDataPacket[]>(
+          `SELECT normalized_name, ccli FROM songs WHERE normalized_name IN (${ placeholders }) AND ccli IS NOT NULL`,
+          names
+        );
+        const ccliMap = new Map<string, string>();
+        for ( const row of rows ) {
+          ccliMap.set( row.normalized_name, row.ccli );
+        }
+
+        // Attach ccli to each song/chorus
+        for ( const week of Object.values( result ) ) {
+          for ( const song of Object.values( week.songs ) ) {
+            if ( song?.name ) {
+              const ccli = ccliMap.get( normalizeSongName( song.name ) );
+              if ( ccli ) song.ccli = ccli;
+            }
+          }
+          for ( const chorus of week.choruses ) {
+            if ( chorus?.name ) {
+              const ccli = ccliMap.get( normalizeSongName( chorus.name ) );
+              if ( ccli ) chorus.ccli = ccli;
+            }
+          }
+        }
+      }
+    } catch {
+      // DB unavailable — songs still returned without CCLI
+    }
+
     res.json( result );
   } catch ( e ) {
     res.status( 500 ).json({ error: 'Failed to load week selections' });
@@ -2775,6 +3051,9 @@ const staticDir = process.env.NODE_ENV === 'development'
   ? path.join( __dirname, 'webapp' )
   : path.join( __dirname, '..', 'lib', 'src', 'webapp' );
 
+// Serve book icon images from SONGS_DIRECTORY/icons/
+app.use( '/api/books/icons', express.static( path.join( config.songsDirectory, 'icons' ) ) );
+
 // Serve index.html for root
 app.get( '/', ( request: Request, response: Response ) => {
   response.sendFile( path.join( staticDir, 'index-old.html' ) );
@@ -2863,6 +3142,8 @@ setupExpressEndpoints();
   schedule.scheduleJob( '* * * * *', scanFolders );
   // Recover stale jobs every 2 minutes
   schedule.scheduleJob( '*/2 * * * *', () => recoverStaleJobs( io ) );
+  // Cleanup oldest MTS file (>6 months) once per hour
+  schedule.scheduleJob( '0 * * * *', cleanupOldestMts );
 
   const PORT = process?.env?.PORT || 8080;
   server.listen( PORT, () => {

@@ -107,6 +107,11 @@
         background: rgba( 117, 183, 152, 0.15 );
         color: #75b798;
       }
+
+      &.approved {
+        background: rgba( 117, 183, 152, 0.2 );
+        color: #75b798;
+      }
     }
   }
 
@@ -466,6 +471,10 @@
   color: #adb5bd;
   min-width: 52px;
   flex-shrink: 0;
+
+  &.no-ccli {
+    color: #dc3545;
+  }
 }
 
 .song-button {

@@ -23,6 +23,8 @@ import { ChorusEditDialogComponent, ChorusEditDialogResult } from './chorus-edit
 import { YoutubeDialogComponent, YoutubeDialogData } from './youtube-dialog.component';
 import { KdenliveDialogComponent } from '../shared/kdenlive-dialog.component';
 import { SermonPickerDialogComponent, SermonPickerDialogResult } from './sermon-picker-dialog.component';
+import { SimpleConfirmDialogComponent } from '../shared/simple-confirm-dialog.component';
+import { SongDetailDialogComponent, SongDetailDialogData } from '../library/song-detail-dialog.component';
 
 
 /**
@@ -32,6 +34,7 @@ interface Song {
   name: string;
   number?: string;
   shortcut?: string;
+  ccli?: string;
 }
 
 
@@ -280,8 +283,8 @@ export class UpcomingComponent implements OnInit, OnDestroy {
       data: { currentSong, slot },
     });
 
-    dialogRef.afterClosed().subscribe( ( song: Song | undefined ) => {
-      if ( !song ) return;
+    dialogRef.afterClosed().subscribe( ( song: Song | null | undefined ) => {
+      if ( song === undefined ) return;
 
       this.http.post( '/api/update-song', {
         date: week.date,
@@ -292,6 +295,48 @@ export class UpcomingComponent implements OnInit, OnDestroy {
         next: () => this.loadMonth(),
         error: ( err ) => console.error( 'Failed to update song:', err ),
       });
+    });
+  }
+
+
+  /**
+   * Clear a song from a slot, removing the shortcut file.
+   *
+   * @param weekIdx - index of the week
+   * @param slot - song slot identifier (e.g., "1", "2a")
+   */
+  clearSong( weekIdx: number, slot: string ): void {
+    const week = this.weeks[ weekIdx ];
+    this.http.post( '/api/update-song', {
+      date: week.date,
+      slot,
+      song: null,
+      weekIdx,
+    }).subscribe({
+      next: () => this.loadMonth(),
+      error: ( err ) => console.error( 'Failed to clear song:', err ),
+    });
+  }
+
+
+  /**
+   * Open the song detail dialog for a song or chorus.
+   * Reloads month data when closed if CCLI metadata was changed.
+   *
+   * @param song - the song to view details for
+   */
+  openSongDetail( song: Song ): void {
+    const dialogRef = this.dialog.open( SongDetailDialogComponent, {
+      width: '550px',
+      maxHeight: '80vh',
+      data: {
+        name: song.name,
+        number: song.number,
+      } as SongDetailDialogData,
+    });
+
+    dialogRef.afterClosed().subscribe( ( result ) => {
+      if ( result ) this.loadMonth();
     });
   }
 
@@ -597,17 +642,28 @@ export class UpcomingComponent implements OnInit, OnDestroy {
       data: { currentSong: this.closingSong, slot: 'closing' },
     });
 
-    dialogRef.afterClosed().subscribe( ( song: Song | undefined ) => {
+    dialogRef.afterClosed().subscribe( ( song: Song | null | undefined ) => {
       if ( song === undefined ) return;
 
-      this.http.post( '/api/closing-song', {
-        year: this.selectedYear,
-        month: this.selectedMonth,
-        song,
-      }).subscribe({
-        next: () => this.loadClosingSong(),
-        error: ( err ) => console.error( 'Failed to save closing song:', err ),
-      });
+      if ( song === null ) {
+        // Clear closing song via DELETE
+        this.http.delete(
+          `/api/closing-song?year=${ this.selectedYear }&month=${ this.selectedMonth }`
+        ).subscribe({
+          next: () => this.loadClosingSong(),
+          error: ( err ) => console.error( 'Failed to clear closing song:', err ),
+        });
+      } else {
+        // Set closing song via POST
+        this.http.post( '/api/closing-song', {
+          year: this.selectedYear,
+          month: this.selectedMonth,
+          song,
+        }).subscribe({
+          next: () => this.loadClosingSong(),
+          error: ( err ) => console.error( 'Failed to save closing song:', err ),
+        });
+      }
     });
   }
 
@@ -617,12 +673,59 @@ export class UpcomingComponent implements OnInit, OnDestroy {
    *
    * @param week - the week whose presentation to approve
    */
-  approvePresentation( week: { date: string; folder: FolderInfo | null } ): void {
+  approvePresentation( week: { date: string; label: string; folder: FolderInfo | null } ): void {
     if ( !week.date || !week.folder?.hasPre || week.folder?.isApproved ) return;
 
-    this.http.put( `/api/folders/${ week.date }/approve`, {} ).subscribe({
-      next: () => this.loadMonth(),
-      error: ( err ) => console.error( 'Failed to approve presentation:', err ),
+    const dialogRef = this.dialog.open( SimpleConfirmDialogComponent, {
+      width: '450px',
+      data: {
+        title: 'Approve Presentation',
+        icon: 'check_circle',
+        message: `Approve the presentation for ${ week.label }?`,
+        detail: 'This removes "TODO" from the filename, signaling that the slides have been reviewed and are ready for Sunday. Once approved, the week will no longer appear on the Outstanding tab until video files are detected.',
+        confirmLabel: 'Approve',
+      },
+    });
+
+    dialogRef.afterClosed().subscribe( ( confirmed ) => {
+      if ( !confirmed ) return;
+
+      this.http.put( `/api/folders/${ week.date }/approve`, {} ).subscribe({
+        next: () => this.loadMonth(),
+        error: ( err ) => console.error( 'Failed to approve presentation:', err ),
+      });
+    });
+  }
+
+
+  /**
+   * Cancel the approval of a presentation for a future week,
+   * adding "TODO" back to the shortcut filename.
+   *
+   * @param week - the week whose approval to cancel
+   */
+  cancelApproval( week: { date: string; label: string; folder: FolderInfo | null } ): void {
+    if ( !week.date || !week.folder?.isApproved ) return;
+
+    const dialogRef = this.dialog.open( SimpleConfirmDialogComponent, {
+      width: '450px',
+      data: {
+        title: 'Cancel Approval',
+        icon: 'undo',
+        message: `Cancel the approval for ${ week.label }?`,
+        detail: 'This adds "TODO" back to the filename, marking the presentation as needing review. The week will reappear on the Outstanding tab.',
+        confirmLabel: 'Cancel Approval',
+        confirmColor: 'warn' as const,
+      },
+    });
+
+    dialogRef.afterClosed().subscribe( ( confirmed ) => {
+      if ( !confirmed ) return;
+
+      this.http.put( `/api/folders/${ week.date }/unapprove`, {} ).subscribe({
+        next: () => this.loadMonth(),
+        error: ( err ) => console.error( 'Failed to cancel approval:', err ),
+      });
     });
   }
 
@@ -787,13 +890,18 @@ export class UpcomingComponent implements OnInit, OnDestroy {
 
 
   /**
-   * Whether a week card is locked (past and not being edited).
+   * Whether a week card is locked for editing.
+   * Past weeks and approved future weeks are locked by default
+   * until the user explicitly unlocks them.
    *
    * @param week - the week object
    * @returns true if the card should be in read-only mode
    */
-  isWeekLocked( week: { date: string } ): boolean {
-    return this.isPastSunday( week.date ) && !this.editingPastWeeks.has( week.date );
+  isWeekLocked( week: { date: string; folder: FolderInfo | null } ): boolean {
+    if ( this.editingPastWeeks.has( week.date ) ) return false;
+    if ( this.isPastSunday( week.date ) ) return true;
+    if ( week.folder?.isApproved ) return true;
+    return false;
   }
 
 

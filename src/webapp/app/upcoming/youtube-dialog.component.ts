@@ -65,7 +65,7 @@ export interface YoutubeDialogData {
         <mat-icon>delete</mat-icon>
         Remove
       </button>
-      <button mat-raised-button color="primary" (click)="save()" [disabled]="saving || !url?.trim()">
+      <button mat-raised-button color="primary" (click)="save()" [disabled]="saving || !url.trim()">
         <mat-icon>save</mat-icon>
         Save
       </button>

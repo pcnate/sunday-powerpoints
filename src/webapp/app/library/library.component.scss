@@ -1,29 +1,49 @@
 :host {
   display: flex;
   flex-direction: column;
-  height: calc( 100vh - 49px - 40px ); // viewport minus tab header minus padding
+  height: 100%;
 }
 
-.filter-row {
+.filter-bar {
   display: flex;
-  gap: 12px;
   align-items: center;
+  gap: 12px;
+  margin: -20px -20px 0; // negate parent padding — edge-to-edge toolbar
+  padding: 10px 16px;
+  background: #1a1d21;
+  border-bottom: 1px solid #495057;
   flex-shrink: 0;
 }
 
 .search-field {
-  flex: 1;
-  max-width: 500px;
+  width: 340px;
+
+  ::ng-deep .mat-mdc-text-field-wrapper {
+    height: 40px;
+  }
+
+  ::ng-deep .mat-mdc-form-field-infix {
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+    min-height: unset;
+  }
 }
 
 .book-field {
-  min-width: 300px;
+  width: 260px;
+
+  ::ng-deep .mat-mdc-text-field-wrapper {
+    height: 40px;
+  }
+
+  ::ng-deep .mat-mdc-form-field-infix {
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+    min-height: unset;
+  }
 }
 
-.song-count {
-  font-size: 0.85rem;
-  color: #6c757d;
-  white-space: nowrap;
+.spacer {
   flex: 1;
 }
 
@@ -32,39 +52,65 @@
   flex-shrink: 0;
 }
 
-.table-scroll {
+.grid-container {
   flex: 1;
-  overflow-y: auto;
   min-height: 0;
-}
+  margin: 0 -20px; // negate parent padding for edge-to-edge grid
 
-.loading {
-  display: flex;
-  justify-content: center;
-  padding: 48px;
-}
-
-.songs-table {
-  width: 100%;
-}
-
-.clickable-row {
-  cursor: pointer;
-
-  &:hover {
-    background: rgba( 110, 168, 254, 0.06 );
+  ag-grid-angular {
+    width: 100%;
+    height: 100%;
   }
 }
 
-.empty-state {
-  text-align: center;
-  padding: 48px 16px;
-  color: #6c757d;
+.grid-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 -20px; // match grid edge-to-edge
+  padding: 6px 16px;
+  background: #1a1d21;
+  border-top: 1px solid #495057;
+  font-size: 0.8rem;
+  color: #adb5bd;
+  flex-shrink: 0;
+}
 
-  mat-icon {
-    font-size: 48px;
-    width: 48px;
-    height: 48px;
-    margin-bottom: 12px;
+// Row click cursor
+:host ::ng-deep .ag-row {
+  cursor: pointer;
+}
+
+// Book icon in AG Grid cells and dropdown options
+.book-icon,
+:host ::ng-deep .book-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+:host ::ng-deep .book-cell {
+  display: inline-flex;
+  align-items: center;
+}
+
+// CCLI column — green when populated, red when missing
+:host ::ng-deep .ccli-populated {
+  background: rgba( 117, 183, 152, 0.15 );
+}
+
+:host ::ng-deep .ccli-missing {
+  background: rgba( 220, 53, 69, 0.15 );
+}
+
+// CCLI link in AG Grid cells
+:host ::ng-deep .ccli-link {
+  color: #75b798;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
   }
 }
