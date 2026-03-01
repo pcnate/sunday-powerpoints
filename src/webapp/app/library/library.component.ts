@@ -27,6 +27,7 @@ interface Song {
   filePath?: string;
   lastModified?: string;
   ccli?: string;
+  license?: string;
   lastUsed?: string;
   totalUsed?: number;
 }
@@ -60,6 +61,7 @@ export class LibraryComponent implements OnInit {
   searchText = '';
   selectedBook = '';
   loading = true;
+  displayedRowCount = 0;
 
   /**
    * AG Grid dark theme matching the app's Bootstrap-dark palette.
@@ -123,6 +125,12 @@ export class LibraryComponent implements OnInit {
         return `<a class="ccli-link" href="https://songselect.ccli.com/songs/${ params.value }" target="_blank" rel="noopener">${ params.value }</a>`;
       },
       cellClass: ( params ) => params.value ? 'ccli-populated' : 'ccli-missing',
+    },
+    {
+      field: 'license',
+      headerName: 'License',
+      width: 150,
+      valueFormatter: ( params: ValueFormatterParams ) => params.value || '',
     },
     {
       field: 'lastUsed',
@@ -231,6 +239,9 @@ export class LibraryComponent implements OnInit {
       }
       return true;
     });
+
+    // Defer count update to next tick so grid processes the new rowData first
+    setTimeout( () => this.updateDisplayedRowCount() );
   }
 
 
@@ -259,6 +270,27 @@ export class LibraryComponent implements OnInit {
    */
   onGridReady( event: GridReadyEvent ): void {
     this.gridApi = event.api;
+    this.updateDisplayedRowCount();
+  }
+
+
+  /**
+   * Update the displayed row count when AG Grid column filters change.
+   */
+  onFilterChanged(): void {
+    this.updateDisplayedRowCount();
+  }
+
+
+  /**
+   * Refresh the displayed row count from the grid API.
+   */
+  private updateDisplayedRowCount(): void {
+    if ( this.gridApi ) {
+      this.displayedRowCount = this.gridApi.getDisplayedRowCount();
+    } else {
+      this.displayedRowCount = this.filteredSongs.length;
+    }
   }
 
 

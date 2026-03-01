@@ -45,7 +45,14 @@ pub struct ToolsConfig {
     pub whisper_model: String,
     pub claude_path: String,
     pub ffmpeg_path: String,
+    #[serde( default = "default_melt_path" )]
     pub melt_path: String,
+}
+
+
+/// Default melt binary path.
+fn default_melt_path() -> String {
+    "melt".to_string()
 }
 
 

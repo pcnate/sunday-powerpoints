@@ -141,7 +141,9 @@
         <div class="chorus-list" *ngIf="( week.selection?.choruses || [] ).length > 0">
           <div class="song-slot" *ngFor="let c of week.selection?.choruses || []; let ci = index"
                [matTooltip]="c.shortcut || ''">
-            <span class="slot-label">Chorus {{ ci + 1 }}</span>
+            <span class="slot-label"
+                  [class.no-ccli]="!c.ccli"
+                  [matTooltip]="!c.ccli ? 'Missing CCLI license' : ''">Chorus {{ ci + 1 }}</span>
             <button mat-stroked-button class="chorus-button"
                     [disabled]="isWeekLocked( week )"
                     (click)="openSongDetail( c )">

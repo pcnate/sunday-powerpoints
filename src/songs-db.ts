@@ -52,6 +52,11 @@ export async function findOrCreateSong( name: string, number?: string, book?: st
   const pool = getPool();
   const normalized = normalizeSongName( name );
 
+  // Clean display name: strip extension and number prefix (number stored separately)
+  let displayName = name.replace( /\.(pptx?|ppt)$/i, '' );
+  if ( number ) displayName = displayName.replace( /^\d+\s*[-–—]?\s*/, '' );
+  displayName = displayName.trim();
+
   /**
    * Build and execute an UPDATE to backfill any missing fields on a matched record.
    *
@@ -118,7 +123,7 @@ export async function findOrCreateSong( name: string, number?: string, book?: st
   // Tier 5: Insert new
   const [ result ] = await pool.query<any>(
     'INSERT INTO songs (name, normalized_name, number, book, file_path) VALUES (?, ?, ?, ?, ?)',
-    [ name, normalized, number || null, book || null, filePath || null ]
+    [ displayName, normalized, number || null, book || null, filePath || null ]
   );
   return result.insertId;
 }

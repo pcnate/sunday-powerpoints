@@ -38,10 +38,11 @@
     [overlayNoRowsTemplate]="noRowsTemplate"
     (rowClicked)="onRowClicked( $event )"
     (gridReady)="onGridReady( $event )"
+    (filterChanged)="onFilterChanged()"
   />
 </div>
 
 <!-- Footer -->
 <div class="grid-footer">
-  <span>{{ filteredSongs.length }} of {{ songs.length }} songs</span>
+  <span>{{ displayedRowCount }} of {{ songs.length }} songs</span>
 </div>

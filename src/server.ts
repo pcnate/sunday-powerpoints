@@ -6,10 +6,10 @@ import dotenv from 'dotenv';
 import ws from 'windows-shortcuts';
 const schedule = require( 'node-schedule' );
 import { createShortcut, sundaysInMonth, resolveToAbsolutePath } from './sunday-powerpoints';
-import { getClosingSong, setClosingSong, syncSelectionsFromFolder, findOrCreateSong, normalizeSongName, FolderSongInfo } from './songs-db';
+import { getClosingSong, setClosingSong, syncSelectionsFromFolder, findOrCreateSong, normalizeSongName, recordSongSelection, removeSongSelection, removeAllChorusSelections, FolderSongInfo } from './songs-db';
 import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
-import { initDb, closeDb, getPool } from './db';
+import { initDb, closeDb, getPool, healthCheck } from './db';
 import { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { createJobRoutes, recoverStaleJobs, createJobIfNotExists } from './routes/jobs';
 import swaggerUi from 'swagger-ui-express';
@@ -1908,7 +1908,8 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
     bookIcon?: string | null;
     filePath?: string;
     lastModified?: string;
-    ccli?: string;
+    ccli: string | null;
+    license: string | null;
     lastUsed?: string;
     totalUsed?: number;
   }[] = [];
@@ -1954,7 +1955,7 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
         const varPath = normalFull.toLowerCase().startsWith( normalRoot.toLowerCase() )
           ? ( config.rootPath || '%OneDriveConsumer%' ) + normalFull.slice( normalRoot.length )
           : normalFull;
-        songFiles.push({ name, number, book, filePath: varPath, lastModified });
+        songFiles.push({ name, number, book, filePath: varPath, lastModified, ccli: null, license: null });
       }
     }
   }
@@ -1965,7 +1966,7 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
   try {
     const pool = getPool();
     const [ rows ] = await pool.query<RowDataPacket[]>(
-      `SELECT s.normalized_name, s.number, s.book, s.ccli,
+      `SELECT s.normalized_name, s.number, s.book, s.ccli, s.license,
               COUNT( sel.id ) AS total_used,
               MAX( sel.sunday_date ) AS last_used
        FROM songs s
@@ -1974,11 +1975,12 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
     );
 
     // Build lookup map: "normalized|number|book" → { ccli, lastUsed, totalUsed }
-    const statsMap = new Map<string, { ccli?: string; lastUsed?: string; totalUsed: number }>();
+    const statsMap = new Map<string, { ccli?: string; license?: string; lastUsed?: string; totalUsed: number }>();
     for ( const row of rows ) {
       const key = `${ row.normalized_name }|${ row.number || '' }|${ ( row.book || '' ).toLowerCase() }`;
       statsMap.set( key, {
         ccli: row.ccli || undefined,
+        license: row.license || undefined,
         lastUsed: row.last_used || undefined,
         totalUsed: Number( row.total_used ) || 0,
       });
@@ -1990,7 +1992,8 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
       const key = `${ normalized }|${ song.number || '' }|${ ( song.book || '' ).toLowerCase() }`;
       const stats = statsMap.get( key );
       if ( stats ) {
-        song.ccli = stats.ccli;
+        song.ccli = stats.ccli || null;
+        song.license = stats.license || null;
         song.lastUsed = stats.lastUsed;
         song.totalUsed = stats.totalUsed;
       } else {
@@ -2338,11 +2341,75 @@ app.post( '/api/songs/create', async ( req: Request, res: Response ) => {
 
 
 /**
+ * Backfill song selections from existing Sunday folder shortcuts into the database.
+ * Iterates the folder cache and calls syncSelectionsFromFolder for each folder.
+ * Idempotent — skips slots that already have active selections.
+ */
+app.post( '/api/admin/backfill-songs', async ( req: Request, res: Response ) => {
+  try {
+    if ( !await healthCheck() ) {
+      res.status( 503 ).json({ error: 'Database not available' });
+      return;
+    }
+
+    let foldersScanned = 0;
+    let selectionsRecorded = 0;
+
+    for ( const [ date, folder ] of Object.entries( sundayFolders.cache ) ) {
+      const songInfos: FolderSongInfo[] = [];
+
+      // Songs
+      for ( const [ slotId, song ] of Object.entries( folder.songs ) ) {
+        if ( !song ) continue;
+        const slotMatch = slotId.match( /^(\d)([a-z])?$/ );
+        if ( !slotMatch ) continue;
+        songInfos.push({
+          slotType: 'song',
+          slotNumber: parseInt( slotMatch[ 1 ] ),
+          slotSuffix: slotMatch[ 2 ] || undefined,
+          name: song.name.replace( /\.(pptx?|ppt)$/i, '' ).replace( /^\d{3}\s*-?\s*/, '' ),
+          number: song.number,
+          book: song.book,
+          target: song.target,
+        });
+      }
+
+      // Choruses
+      for ( let i = 0; i < folder.choruses.length; i++ ) {
+        const chorus = folder.choruses[ i ];
+        const chorusName = chorus.name.replace( /\.(pptx?|ppt)$/i, '' ).replace( /^\d{3}\s*-?\s*/, '' );
+        songInfos.push({
+          slotType: 'chorus',
+          slotNumber: i + 1,
+          name: chorusName,
+          book: chorus.book,
+          target: chorus.target,
+        });
+      }
+
+      if ( songInfos.length > 0 ) {
+        const before = selectionsRecorded;
+        await syncSelectionsFromFolder( date, songInfos, config.songsDirectory );
+        selectionsRecorded += songInfos.length;
+        foldersScanned++;
+      }
+    }
+
+    console.log( `[BACKFILL] Scanned ${ foldersScanned } folders, processed ${ selectionsRecorded } song slots` );
+    res.json({ ok: true, foldersScanned, selectionsProcessed: selectionsRecorded });
+  } catch ( err ) {
+    console.error( '[BACKFILL] Error:', err );
+    res.status( 500 ).json({ error: 'Backfill failed' });
+  }
+});
+
+
+/**
  * function to get all sub folders in a directory recursively
- * 
+ *
  * @param dir - directory to search
  * @returns array of absolute paths of all sub folders
- * 
+ *
  * use async yield
  */
 async function* getSubFolders( dir: string ): AsyncGenerator<string> {
@@ -2801,6 +2868,24 @@ function findSongFile( song: any, songsDirectory: string ): string | null {
 
 
 /**
+ * Extract the book/folder name from a resolved song file path.
+ * The book is the immediate parent directory relative to the songs directory.
+ *
+ * @param songPath - absolute path to the song file
+ * @param songsDirectory - root songs directory
+ * @returns book name, or undefined if not resolvable
+ */
+function extractBookFromPath( songPath: string, songsDirectory: string ): string | undefined {
+  const normalSong = songPath.replace( /\\/g, '/' );
+  const normalBase = songsDirectory.replace( /\\/g, '/' ).replace( /\/$/, '' );
+  if ( !normalSong.toLowerCase().startsWith( normalBase.toLowerCase() ) ) return undefined;
+  const relative = normalSong.slice( normalBase.length ).replace( /^\//, '' );
+  const parts = relative.split( '/' );
+  return parts.length >= 2 ? parts[ 0 ] : undefined;
+}
+
+
+/**
  * Delete all shortcut files in a folder that start with the given prefix
  *
  * @param folder - absolute path to the folder
@@ -2851,6 +2936,21 @@ app.post( '/api/update-song', ( req: Request, res: Response ) => {
         } else {
           console.log( `[SONG SHORTCUT] Song ${ slotId }: Created shortcut '${ shortcutName }' in folder ${ weekFolder }` );
         }
+
+        // Record selection in DB
+        try {
+          if ( await healthCheck() ) {
+            const slotNum = parseInt( slotMatch[ 1 ] );
+            const slotSuffix = slotMatch[ 2 ]?.toLowerCase() || undefined;
+            const book = song.book || extractBookFromPath( songFile, config.songsDirectory );
+            const songId = await findOrCreateSong( song.name, song.number, book );
+            await recordSongSelection( songId, date, 'song', slotNum, slotSuffix );
+            console.log( `[SONG DB] Recorded song selection: ${ song.name } → ${ date } slot ${ slotId }` );
+          }
+        } catch ( err ) {
+          console.error( '[SONG DB] Failed to record song selection:', err );
+        }
+
         return res.json({ success: true, status });
       }
       return res.json({ success: true });
@@ -2992,6 +3092,25 @@ app.post( '/api/chorus-update', ( req: Request, res: Response ) => {
             console.error( `[CHORUS SHORTCUT] Failed to create shortcut '${ shortcutName }' in folder ${ weekFolder }` );
           }
         }
+
+        // Record chorus selections in DB
+        try {
+          if ( await healthCheck() ) {
+            await removeAllChorusSelections( date );
+            for ( let i = 0; i < choruses.length; i++ ) {
+              const chorus = choruses[ i ];
+              if ( !chorus.name ) continue;
+              const chorusFile = findSongFile( chorus, config.songsDirectory );
+              const book = chorus.book || ( chorusFile ? extractBookFromPath( chorusFile, config.songsDirectory ) : undefined );
+              const songId = await findOrCreateSong( chorus.name, chorus.number, book );
+              await recordSongSelection( songId, date, 'chorus', i + 1 );
+            }
+            console.log( `[SONG DB] Recorded ${ choruses.length } chorus selections for ${ date }` );
+          }
+        } catch ( err ) {
+          console.error( '[SONG DB] Failed to record chorus selections:', err );
+        }
+
         return res.json({ success: true, status: allCreated ? 'created' : 'partial-error' });
       }
       return res.json({ success: true });
