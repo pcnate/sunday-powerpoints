@@ -9,7 +9,7 @@
  7. convert to docker (if possible)
  8. ~~add bible verse extraction API endpoint~~
  9. ~~add bible verse update API endpoint~~
- 10. add ccli license extraction and reporting api
+ 10. ~~add ccli license extraction and reporting api~~ (CCLI extracted from pptx, license column in library, song tracking DB)
  11. implement full Sunday preparation pipeline (Stage 1 + Stage 2)
  12. add presentation approval workflow (Planning tab)
  13. extend `/api/folders` response with pipeline status booleans

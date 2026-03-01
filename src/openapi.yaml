@@ -220,6 +220,9 @@ paths:
     get:
       tags: [Songs]
       summary: Get song selections for a month
+      description: >
+        Returns song and chorus selections for each Sunday in the month,
+        parsed from shortcut files and enriched with DB id and CCLI data.
       parameters:
         - name: month
           in: query
@@ -233,25 +236,64 @@ paths:
             type: integer
       responses:
         '200':
-          description: Song and chorus selections per week
+          description: >
+            Map of week index to selections. Each week has songs (keyed by slot)
+            and choruses (array).
           content:
             application/json:
               schema:
-                type: array
-                items:
+                type: object
+                additionalProperties:
                   type: object
+                  properties:
+                    songs:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        nullable: true
+                        properties:
+                          id:
+                            type: integer
+                            description: Database song ID
+                          name:
+                            type: string
+                          number:
+                            type: string
+                          shortcut:
+                            type: string
+                          ccli:
+                            type: string
+                    choruses:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                            description: Database song ID
+                          name:
+                            type: string
+                          number:
+                            type: string
+                          shortcut:
+                            type: string
+                          ccli:
+                            type: string
 
   /api/update-song:
     post:
       tags: [Songs]
       summary: Update song selection for a week
+      description: >
+        Creates a shortcut (.lnk) for the selected song and records the selection in the database.
+        When song.id is provided, uses it directly for DB tracking. Otherwise falls back to fuzzy name matching.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [date, slot, song]
+              required: [date, slot]
               properties:
                 date:
                   type: string
@@ -264,6 +306,18 @@ paths:
                   pattern: '^\d[a-z]?$'
                 song:
                   type: object
+                  nullable: true
+                  description: Song to select (null to clear)
+                  properties:
+                    id:
+                      type: integer
+                      description: Database song ID (preferred — bypasses fuzzy matching)
+                    name:
+                      type: string
+                    number:
+                      type: string
+                    book:
+                      type: string
       responses:
         '200':
           description: Update result
@@ -276,6 +330,8 @@ paths:
                     type: boolean
                   status:
                     type: string
+        '404':
+          description: Song file not found in library
 
   /api/song-slot-split:
     post:
@@ -320,15 +376,51 @@ paths:
     post:
       tags: [Songs]
       summary: Update chorus selections for a week
+      description: >
+        Replaces all chorus shortcuts for a Sunday and records selections in the database.
+        When chorus.id is provided, uses it directly for DB tracking.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [date, slot, choruses]
+              properties:
+                date:
+                  type: string
+                  pattern: '^\d{8}$'
+                weekIdx:
+                  type: integer
+                slot:
+                  type: string
+                  enum: [choruses]
+                choruses:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        description: Database song ID (preferred — bypasses fuzzy matching)
+                      name:
+                        type: string
+                      number:
+                        type: string
+                      book:
+                        type: string
       responses:
         '200':
           description: Update result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  status:
+                    type: string
 
   # --- Notes ---
   /api/notes:
@@ -426,6 +518,31 @@ paths:
       responses:
         '200':
           description: Result of template copy
+
+  /api/admin/backfill-songs:
+    post:
+      tags: [Admin]
+      summary: Backfill song selections from existing folders
+      description: >
+        Scans all cached Sunday folders and syncs song/chorus/closing selections
+        into the database. Idempotent — skips date+slot combinations that already
+        have active records.
+      responses:
+        '200':
+          description: Backfill result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  foldersScanned:
+                    type: integer
+                  selectionsRecorded:
+                    type: integer
+        '500':
+          description: Backfill failed
 
   # --- Jobs ---
   /api/jobs:
@@ -1172,12 +1289,33 @@ components:
     SongFile:
       type: object
       properties:
+        id:
+          type: integer
+          description: Database song ID (present when DB is available)
         name:
           type: string
-        path:
+        number:
           type: string
         book:
           type: string
+        bookIcon:
+          type: string
+          nullable: true
+        filePath:
+          type: string
+        lastModified:
+          type: string
+        ccli:
+          type: string
+          nullable: true
+        license:
+          type: string
+          nullable: true
+        lastUsed:
+          type: string
+          description: YYYYMMDD of most recent usage
+        totalUsed:
+          type: integer
 
     SongHistoryResponse:
       type: object
