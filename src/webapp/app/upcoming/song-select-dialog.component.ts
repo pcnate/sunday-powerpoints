@@ -18,6 +18,7 @@ import { CreateSongDialogComponent } from '../library/create-song-dialog.compone
  * A song from the library API.
  */
 interface LibrarySong {
+  id?: number;
   name: string;
   number?: string;
   book?: string;
@@ -317,7 +318,7 @@ export class SongSelectDialogComponent implements OnInit {
    * @param song - the chosen song
    */
   select( song: LibrarySong ): void {
-    this.dialogRef.close({ name: song.name, number: song.number, book: song.book });
+    this.dialogRef.close({ id: song.id, name: song.name, number: song.number, book: song.book });
   }
 
 

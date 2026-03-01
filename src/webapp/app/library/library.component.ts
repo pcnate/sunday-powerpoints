@@ -20,6 +20,7 @@ import { SongDetailDialogComponent, SongDetailDialogData } from './song-detail-d
  * Song from the library API.
  */
 interface Song {
+  id?: number;
   name: string;
   number?: string;
   book?: string;

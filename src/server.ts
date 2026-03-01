@@ -1902,6 +1902,7 @@ app.delete( '/api/closing-song', ( req: Request, res: Response ) => {
 app.get( '/api/songs', async ( req: Request, res: Response ) => {
   const songsDir = config.songsDirectory;
   let songFiles: {
+    id?: number;
     name: string;
     number?: string;
     book?: string;
@@ -1966,7 +1967,7 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
   try {
     const pool = getPool();
     const [ rows ] = await pool.query<RowDataPacket[]>(
-      `SELECT s.normalized_name, s.number, s.book, s.ccli, s.license,
+      `SELECT s.id, s.normalized_name, s.number, s.book, s.ccli, s.license,
               COUNT( sel.id ) AS total_used,
               MAX( sel.sunday_date ) AS last_used
        FROM songs s
@@ -1974,11 +1975,12 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
        GROUP BY s.id`
     );
 
-    // Build lookup map: "normalized|number|book" → { ccli, lastUsed, totalUsed }
-    const statsMap = new Map<string, { ccli?: string; license?: string; lastUsed?: string; totalUsed: number }>();
+    // Build lookup map: "normalized|number|book" → { id, ccli, lastUsed, totalUsed }
+    const statsMap = new Map<string, { id: number; ccli?: string; license?: string; lastUsed?: string; totalUsed: number }>();
     for ( const row of rows ) {
       const key = `${ row.normalized_name }|${ row.number || '' }|${ ( row.book || '' ).toLowerCase() }`;
       statsMap.set( key, {
+        id: row.id,
         ccli: row.ccli || undefined,
         license: row.license || undefined,
         lastUsed: row.last_used || undefined,
@@ -1992,6 +1994,7 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
       const key = `${ normalized }|${ song.number || '' }|${ ( song.book || '' ).toLowerCase() }`;
       const stats = statsMap.get( key );
       if ( stats ) {
+        song.id = stats.id;
         song.ccli = stats.ccli || null;
         song.license = stats.license || null;
         song.lastUsed = stats.lastUsed;
@@ -2794,26 +2797,32 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
         const names = Array.from( nameSet );
         const placeholders = names.map( () => '?' ).join( ', ' );
         const [ rows ] = await pool.query<RowDataPacket[]>(
-          `SELECT normalized_name, ccli FROM songs WHERE normalized_name IN (${ placeholders }) AND ccli IS NOT NULL`,
+          `SELECT id, normalized_name, ccli FROM songs WHERE normalized_name IN (${ placeholders })`,
           names
         );
-        const ccliMap = new Map<string, string>();
+        const songDbMap = new Map<string, { id: number; ccli?: string }>();
         for ( const row of rows ) {
-          ccliMap.set( row.normalized_name, row.ccli );
+          songDbMap.set( row.normalized_name, { id: row.id, ccli: row.ccli || undefined } );
         }
 
-        // Attach ccli to each song/chorus
+        // Attach id and ccli to each song/chorus
         for ( const week of Object.values( result ) ) {
           for ( const song of Object.values( week.songs ) ) {
             if ( song?.name ) {
-              const ccli = ccliMap.get( normalizeSongName( song.name ) );
-              if ( ccli ) song.ccli = ccli;
+              const dbInfo = songDbMap.get( normalizeSongName( song.name ) );
+              if ( dbInfo ) {
+                song.id = dbInfo.id;
+                if ( dbInfo.ccli ) song.ccli = dbInfo.ccli;
+              }
             }
           }
           for ( const chorus of week.choruses ) {
             if ( chorus?.name ) {
-              const ccli = ccliMap.get( normalizeSongName( chorus.name ) );
-              if ( ccli ) chorus.ccli = ccli;
+              const dbInfo = songDbMap.get( normalizeSongName( chorus.name ) );
+              if ( dbInfo ) {
+                chorus.id = dbInfo.id;
+                if ( dbInfo.ccli ) chorus.ccli = dbInfo.ccli;
+              }
             }
           }
         }
@@ -2943,9 +2952,9 @@ app.post( '/api/update-song', ( req: Request, res: Response ) => {
             const slotNum = parseInt( slotMatch[ 1 ] );
             const slotSuffix = slotMatch[ 2 ]?.toLowerCase() || undefined;
             const book = song.book || extractBookFromPath( songFile, config.songsDirectory );
-            const songId = await findOrCreateSong( song.name, song.number, book );
+            const songId = song.id || await findOrCreateSong( song.name, song.number, book );
             await recordSongSelection( songId, date, 'song', slotNum, slotSuffix );
-            console.log( `[SONG DB] Recorded song selection: ${ song.name } → ${ date } slot ${ slotId }` );
+            console.log( `[SONG DB] Recorded song selection: ${ song.name } (id=${ songId }) → ${ date } slot ${ slotId }` );
           }
         } catch ( err ) {
           console.error( '[SONG DB] Failed to record song selection:', err );
@@ -3102,7 +3111,7 @@ app.post( '/api/chorus-update', ( req: Request, res: Response ) => {
               if ( !chorus.name ) continue;
               const chorusFile = findSongFile( chorus, config.songsDirectory );
               const book = chorus.book || ( chorusFile ? extractBookFromPath( chorusFile, config.songsDirectory ) : undefined );
-              const songId = await findOrCreateSong( chorus.name, chorus.number, book );
+              const songId = chorus.id || await findOrCreateSong( chorus.name, chorus.number, book );
               await recordSongSelection( songId, date, 'chorus', i + 1 );
             }
             console.log( `[SONG DB] Recorded ${ choruses.length } chorus selections for ${ date }` );

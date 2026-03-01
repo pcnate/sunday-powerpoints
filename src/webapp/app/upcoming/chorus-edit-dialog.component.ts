@@ -21,7 +21,7 @@ export interface ChorusEditDialogData {
  */
 export interface ChorusEditDialogResult {
   action: 'change' | 'remove';
-  song?: { name: string; number?: string; book?: string };
+  song?: { id?: number; name: string; number?: string; book?: string };
 }
 
 
@@ -132,7 +132,7 @@ export class ChorusEditDialogComponent {
       data: { currentSong: this.data.chorus, slot: 'chorus' },
     });
 
-    selectRef.afterClosed().subscribe( ( song: { name: string; number?: string; book?: string } | undefined ) => {
+    selectRef.afterClosed().subscribe( ( song: { id?: number; name: string; number?: string; book?: string } | undefined ) => {
       if ( !song ) return;
       this.dialogRef.close({ action: 'change', song } as ChorusEditDialogResult);
     });

@@ -31,8 +31,10 @@ import { SongDetailDialogComponent, SongDetailDialogData } from '../library/song
  * Song object from the API.
  */
 interface Song {
+  id?: number;
   name: string;
   number?: string;
+  book?: string;
   shortcut?: string;
   ccli?: string;
 }
