@@ -53,7 +53,8 @@
     <mat-label>Type</mat-label>
     <mat-select [(value)]="typeFilter" (selectionChange)="loadJobs()">
       <mat-option value="">All Types</mat-option>
-      <mat-option value="video-alignment">Video Alignment</mat-option>
+      <mat-option value="ffprobe">FFprobe</mat-option>
+      <mat-option value="transcode">Transcode</mat-option>
       <mat-option value="transcription">Transcription</mat-option>
       <mat-option value="claude-processing">Claude Processing</mat-option>
     </mat-select>

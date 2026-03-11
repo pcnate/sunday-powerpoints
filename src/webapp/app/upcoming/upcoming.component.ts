@@ -332,8 +332,10 @@ export class UpcomingComponent implements OnInit, OnDestroy {
       width: '550px',
       maxHeight: '80vh',
       data: {
+        id: song.id,
         name: song.name,
         number: song.number,
+        book: song.book,
       } as SongDetailDialogData,
     });
 

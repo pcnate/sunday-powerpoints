@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate PowerPoint management for weekly church services. The system creates folders for each Sunday of the month, manages song shortcuts, tracks presentation files, and provides a web interface for song selection and file management. It includes a job queue system for automated video processing (alignment, transcription, and AI-powered metadata extraction).
+Sunday-powerpoints is a hybrid Node.js/Angular application designed to automate PowerPoint management for weekly church services. The system creates folders for each Sunday of the month, manages song shortcuts, tracks presentation files, and provides a web interface for song selection and file management. It includes a job queue system for automated video processing (transcode, transcription, and AI-powered metadata extraction).
 
 ## Development Commands
 
@@ -94,17 +94,18 @@ The job queue processes a video pipeline for sermon recordings:
 - `src/openapi.yaml` — Full API documentation
 
 **Job types:**
-- `video-alignment` — FFmpeg scene detection + Kdenlive project generation
+- `transcode` — Melt/Kdenlive rendering to production MP4
 - `transcription` — Whisper speech-to-text on production MP4
 - `claude-processing` — Claude Code extracts sermon metadata from VTT
 
 **Job lifecycle:** `pending` → `processing` (claimed by worker) → `completed`/`failed`
 
 **Auto-detection:** `scanFolders()` runs every minute and:
-- Creates `video-alignment` jobs when 2+ raw MP4s found in `Vids/` without a production file
 - Creates `transcription` jobs when `YYYYMMDD-production.mp4` appears
 
-**Job chaining:** Completing a `transcription` job auto-creates a `claude-processing` job.
+**Job chaining:**
+- Completing a `transcode` job auto-creates a `transcription` job.
+- Completing a `transcription` job auto-creates a `claude-processing` job.
 
 **Stale recovery:** Every 2 minutes, jobs with heartbeats older than 2 minutes are recovered (retried or failed).
 
@@ -120,7 +121,7 @@ The job queue processes a video pipeline for sermon recordings:
 - `src/job_runner.rs` — Job execution orchestrator (dispatches to runners)
 - `src/tray.rs` — System tray icon + menu using winit + tray-icon + muda
 - `src/web_ui.rs` — Embedded axum config web server on port 9090
-- `src/runners/{alignment,transcription,claude}.rs` — **STUB** runners (sleep 5s, return success)
+- `src/runners/{transcode,transcription,claude}.rs` — Job runners (transcode is real, others are stubs)
 
 **Scheduler state machine:**
 `OFF_SHIFT → IDLE → POLLING → EXECUTING → COOLDOWN → IDLE` with `PAUSED` toggle

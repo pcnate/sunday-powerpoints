@@ -2,9 +2,9 @@
  * Generates a Kdenlive project XML file for sermon video editing.
  *
  * Produces an MLT XML document with:
- * - OBS recording (MKV, optional): 1 video track (desktop capture) + 3 audio tracks (desktop, mic, soundboard)
+ * - OBS recording (MKV, optional): 1 video track (desktop capture) + 3 audio tracks (desktop, desktop mic, soundboard)
  * - Camera recording (MP4): 1 video track + 1 audio track
- * - 5 audio tracks + 5 video tracks (matching standard Kdenlive layout)
+ * - 4 audio tracks + 2 video tracks
  * - Render URL pre-set to Vids/YYYYMMDD-production.mp4
  */
 
@@ -17,6 +17,7 @@ interface KdenliveOptions {
   rootPath: string;
   obsFile?: string;
   cameraFile: string;
+  duration?: string;
 }
 
 
@@ -179,12 +180,10 @@ function chain(
  * Track layout (bottom to top in Kdenlive):
  * - A1: Camera audio
  * - A2: OBS Track 1 (desktop audio) — empty if no OBS
- * - A3: OBS Track 2 (mic) — empty if no OBS
+ * - A3: OBS Track 2 (desktop mic) — empty if no OBS
  * - A4: OBS Track 3 (soundboard) — empty if no OBS
- * - A5: Empty spare audio track
  * - V1: Camera video
  * - V2: OBS desktop video — empty if no OBS
- * - V3-V5: Empty spare video tracks
  *
  * @param options - generation options
  * @returns complete MLT XML string
@@ -198,8 +197,8 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   const cameraUuid = uuid();
   const documentId = Date.now().toString();
 
-  // Default duration placeholder — user will edit in Kdenlive
-  const dur = '01:30:00.000';
+  // Use ffprobe duration if available, else default placeholder
+  const dur = options.duration || '01:30:00.000';
 
   const parts: string[] = [];
 
@@ -276,7 +275,7 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   parts.push( result.xml );
   fId = result.nextFilterId;
 
-  // A3: OBS Track 2 (mic) — empty if no OBS
+  // A3: OBS Track 2 (desktop mic) — empty if no OBS
   if ( hasObs ) {
     parts.push( ` <playlist id="playlist4">
   <entry in="00:00:00.000" out="${ dur }" producer="chain2">
@@ -288,7 +287,7 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   }
   parts.push( ` <playlist id="playlist5"/>` );
 
-  result = audioTractor( 'tractor2', 'playlist4', 'playlist5', fId, 'Mic', dur );
+  result = audioTractor( 'tractor2', 'playlist4', 'playlist5', fId, 'Desktop Mic', dur );
   parts.push( result.xml );
   fId = result.nextFilterId;
 
@@ -308,79 +307,59 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   parts.push( result.xml );
   fId = result.nextFilterId;
 
-  // A5: Empty spare audio track
-  parts.push( ` <playlist id="playlist8"/>` );
-  parts.push( ` <playlist id="playlist9"/>` );
-
-  result = audioTractor( 'tractor4', 'playlist8', 'playlist9', fId, 'Audio 5', dur );
-  parts.push( result.xml );
-  fId = result.nextFilterId;
-
   // === Video track playlists + tractors ===
   // V1: Camera video
-  parts.push( ` <playlist id="playlist10">
+  parts.push( ` <playlist id="playlist8">
   <entry in="00:00:00.000" out="${ dur }" producer="chain4">
    <property name="kdenlive:id">6</property>
   </entry>
  </playlist>` );
-  parts.push( ` <playlist id="playlist11"/>` );
-  parts.push( videoTractor( 'tractor5', 'playlist10', 'playlist11', 'Camera', dur ) );
+  parts.push( ` <playlist id="playlist9"/>` );
+  parts.push( videoTractor( 'tractor4', 'playlist8', 'playlist9', 'Camera', dur ) );
 
   // V2: OBS desktop video — empty if no OBS
   if ( hasObs ) {
-    parts.push( ` <playlist id="playlist12">
+    parts.push( ` <playlist id="playlist10">
   <entry in="00:00:00.000" out="${ dur }" producer="chain5">
    <property name="kdenlive:id">5</property>
   </entry>
  </playlist>` );
   } else {
-    parts.push( ` <playlist id="playlist12"/>` );
+    parts.push( ` <playlist id="playlist10"/>` );
   }
-  parts.push( ` <playlist id="playlist13"/>` );
-  parts.push( videoTractor( 'tractor6', 'playlist12', 'playlist13', 'OBS Desktop', dur ) );
-
-  // V3-V5: Empty spare video tracks
-  for ( let i = 0; i < 3; i++ ) {
-    const pA = `playlist${ 14 + i * 2 }`;
-    const pB = `playlist${ 15 + i * 2 }`;
-    const tId = `tractor${ 7 + i }`;
-    parts.push( ` <playlist id="${ pA }"/>` );
-    parts.push( ` <playlist id="${ pB }"/>` );
-    parts.push( videoTractor( tId, pA, pB, `Video ${ i + 3 }`, dur ) );
-  }
+  parts.push( ` <playlist id="playlist11"/>` );
+  parts.push( videoTractor( 'tractor5', 'playlist10', 'playlist11', 'OBS Desktop', dur ) );
 
   // === Sequence tractor (the main timeline) ===
-  // Track layout: producer0 (black) + 5 audio tractors + 5 video tractors = 11 tracks
+  // Track layout: producer0 (black) + 4 audio tractors + 2 video tractors = 7 tracks
   //
   // Group track indices (0-based from first tractor, skipping producer0):
   //   0: Camera Audio     ← Camera group
   //   1: Desktop Audio    ← OBS group
-  //   2: Mic              ← OBS group
+  //   2: Desktop Mic      ← OBS group
   //   3: Soundboard       ← OBS group
-  //   4: Audio 5 (spare)
-  //   5: Camera Video     ← Camera group
-  //   6: OBS Desktop      ← OBS group
-  //   7-9: spare video
+  //   4: Camera Video     ← Camera group
+  //   5: OBS Desktop      ← OBS group
   const groups: object[] = [];
 
-  // OBS group: links OBS audio tracks (1-3) + OBS video track (6)
+  // OBS group: links OBS audio tracks (1-3) + OBS video track (5)
   if ( hasObs ) {
     groups.push({
       children: [
         { data: '1:0:-1', leaf: 'clip', type: 'Leaf' },
         { data: '2:0:-1', leaf: 'clip', type: 'Leaf' },
         { data: '3:0:-1', leaf: 'clip', type: 'Leaf' },
-        { data: '6:0:-1', leaf: 'clip', type: 'Leaf' },
+        { data: '5:0:-1', leaf: 'clip', type: 'Leaf' },
       ],
       type: 'Normal',
     });
   }
 
-  // Camera group: links camera audio (0) + camera video (5)
+  // Camera group: links camera audio (0) + camera video (4)
   groups.push({
     children: [
       { data: '0:0:-1', leaf: 'clip', type: 'Leaf' },
-      { data: '5:0:-1', leaf: 'clip', type: 'Leaf' },
+      { data: '4:0:-1', leaf: 'clip', type: 'Leaf' },
     ],
     type: 'AVSplit',
   });
@@ -393,8 +372,8 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   <property name="kdenlive:clipname">Sequence 1</property>
   <property name="kdenlive:sequenceproperties.hasAudio">1</property>
   <property name="kdenlive:sequenceproperties.hasVideo">1</property>
-  <property name="kdenlive:sequenceproperties.activeTrack">6</property>
-  <property name="kdenlive:sequenceproperties.tracksCount">10</property>
+  <property name="kdenlive:sequenceproperties.activeTrack">5</property>
+  <property name="kdenlive:sequenceproperties.tracksCount">6</property>
   <property name="kdenlive:sequenceproperties.documentuuid">${ sequenceUuid }</property>
   <property name="kdenlive:control_uuid">${ sequenceUuid }</property>
   <property name="kdenlive:duration">${ dur }</property>
@@ -410,7 +389,7 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   <property name="kdenlive:sequenceproperties.scrollPos">0</property>
   <property name="kdenlive:sequenceproperties.tracks">4</property>
   <property name="kdenlive:sequenceproperties.verticalzoom">1</property>
-  <property name="kdenlive:sequenceproperties.videoTarget">6</property>
+  <property name="kdenlive:sequenceproperties.videoTarget">5</property>
   <property name="kdenlive:sequenceproperties.zonein">0</property>
   <property name="kdenlive:sequenceproperties.zoneout">75</property>
   <property name="kdenlive:sequenceproperties.zoom">8</property>
@@ -424,14 +403,10 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   <track producer="tractor2"/>
   <track producer="tractor3"/>
   <track producer="tractor4"/>
-  <track producer="tractor5"/>
-  <track producer="tractor6"/>
-  <track producer="tractor7"/>
-  <track producer="tractor8"/>
-  <track producer="tractor9"/>` );
+  <track producer="tractor5"/>` );
 
-  // Audio mix transitions (tracks 1-5 → audio tractors)
-  for ( let i = 0; i < 5; i++ ) {
+  // Audio mix transitions (tracks 1-4 → audio tractors)
+  for ( let i = 0; i < 4; i++ ) {
     parts.push( `  <transition id="transition${ i }">
    <property name="a_track">0</property>
    <property name="b_track">${ i + 1 }</property>
@@ -444,11 +419,11 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   </transition>` );
   }
 
-  // Video composite transitions (tracks 6-10 → video tractors)
-  for ( let i = 0; i < 5; i++ ) {
-    parts.push( `  <transition id="transition${ 5 + i }">
+  // Video composite transitions (tracks 5-6 → video tractors)
+  for ( let i = 0; i < 2; i++ ) {
+    parts.push( `  <transition id="transition${ 4 + i }">
    <property name="a_track">0</property>
-   <property name="b_track">${ 6 + i }</property>
+   <property name="b_track">${ 5 + i }</property>
    <property name="compositing">0</property>
    <property name="distort">0</property>
    <property name="rotate_center">0</property>

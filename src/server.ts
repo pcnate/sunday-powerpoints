@@ -11,7 +11,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
 import { initDb, closeDb, getPool, healthCheck } from './db';
 import { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
-import { createJobRoutes, recoverStaleJobs, createJobIfNotExists } from './routes/jobs';
+import { createJobRoutes, recoverStaleJobs, createJobIfNotExists, createProbeJobIfNotExists, createHeldProbeJob } from './routes/jobs';
+import { getVideosByPaths, getOldestMtsVideo, deleteVideo } from './videos-db';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
@@ -695,6 +696,23 @@ const config = {
 if ( !config.templateFile ) {
   console.error( 'TEMPLATE_FILE environment variable is required.' );
   process.exit( 1 );
+}
+
+/**
+ * Convert an absolute path to a relative job path by stripping the OneDrive root prefix.
+ * Uses ROOT_PATH / %OneDriveConsumer% so paths are portable across machines.
+ *
+ * @param absolutePath - full filesystem path
+ * @returns path relative to the OneDrive root
+ */
+function toJobPath( absolutePath: string ): string {
+  const onedriveRoot = resolveToAbsolutePath( config.rootPath || '%OneDriveConsumer%' )
+    .replace( /\\/g, '/' ).replace( /\/+$/, '' );
+  const normalized = absolutePath.replace( /\\/g, '/' );
+  if ( normalized.startsWith( onedriveRoot + '/' ) ) {
+    return normalized.slice( onedriveRoot.length + 1 );
+  }
+  return normalized;
 }
 
 console.log( 'Resolved server config:', JSON.stringify( config, null, 2 ) );
@@ -1641,12 +1659,30 @@ app.post( '/api/folders/:name/create-kdenlive', async ( req: Request, res: Respo
   }
 
   try {
+    // Query videos table for accurate duration
+    let duration: string | undefined;
+    try {
+      const filesToCheck = [ cameraFile, obsFile ].filter( Boolean );
+      const relPaths = filesToCheck.map( f => toJobPath( path.join( vidsDir, f! ) ) );
+      const videos = await getVideosByPaths( relPaths );
+      let maxSecs = 0;
+      for ( const v of videos ) {
+        if ( v.duration_secs && v.duration_secs > maxSecs ) {
+          maxSecs = v.duration_secs;
+          duration = v.duration_timecode ?? undefined;
+        }
+      }
+    } catch {
+      // ffprobe metadata not available — use default duration
+    }
+
     const { generateKdenlive } = require( './kdenlive-generator' );
     const xml = generateKdenlive({
       sundayDate: folderName,
       rootPath: vidsDir.replace( /\\/g, '/' ),
       obsFile: obsFile || undefined,
       cameraFile,
+      duration,
     });
 
     await fs.promises.writeFile( outputFile, xml, 'utf-8' );
@@ -1689,8 +1725,8 @@ app.post( '/api/folders/:name/approve-kdenlive', async ( req: Request, res: Resp
       return;
     }
 
-    const kdenlivePath = path.join( vidsDir, kdenliveFile ).replace( /\\/g, '/' );
-    const productionPath = path.join( vidsDir, `${ folderName }-production.mp4` ).replace( /\\/g, '/' );
+    const kdenlivePath = toJobPath( path.join( vidsDir, kdenliveFile ) );
+    const productionPath = toJobPath( path.join( vidsDir, `${ folderName }-production.mp4` ) );
 
     // Check if production MP4 already exists
     try {
@@ -1716,6 +1752,13 @@ app.post( '/api/folders/:name/approve-kdenlive', async ( req: Request, res: Resp
 
     io.emit( 'job:created', job );
     console.log( `[KDENLIVE] Queued transcode job #${ job.id } for ${ folderName }` );
+
+    // Create a held ffprobe job for the production file (released when transcode completes)
+    const heldProbe = await createHeldProbeJob( folderName, productionPath, job.id );
+    if ( heldProbe ) {
+      io.emit( 'job:created', heldProbe );
+      console.log( `[KDENLIVE] Created held ffprobe job #${ heldProbe.id } for ${ folderName }` );
+    }
 
     res.json({ ok: true, jobId: job.id });
   } catch ( err ) {
@@ -1988,7 +2031,8 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
       });
     }
 
-    // Merge DB stats into filesystem song list
+    // Merge DB stats into filesystem song list, inserting missing songs
+    const missing: typeof songFiles = [];
     for ( const song of songFiles ) {
       const normalized = normalizeSongName( song.name );
       const key = `${ normalized }|${ song.number || '' }|${ ( song.book || '' ).toLowerCase() }`;
@@ -2001,11 +2045,39 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
         song.totalUsed = stats.totalUsed;
       } else {
         song.totalUsed = 0;
+        missing.push( song );
+      }
+    }
+
+    // Seed missing songs into the database
+    for ( const song of missing ) {
+      try {
+        const id = await findOrCreateSong( song.name, song.number, song.book, song.filePath );
+        song.id = id;
+      } catch {
+        // Non-fatal — song just won't have a DB record yet
       }
     }
   } catch {
     // DB not available — return songs without stats
   }
+
+  // Deduplicate by normalized name + number + book (e.g. "It's" vs "Its" on disk)
+  const seen = new Map<string, number>();
+  songFiles = songFiles.filter( ( song, idx ) => {
+    const normalized = normalizeSongName( song.name );
+    const key = `${ normalized }|${ song.number || '' }|${ ( song.book || '' ).toLowerCase() }`;
+    if ( seen.has( key ) ) {
+      // Keep the one with a DB id; if both have one, keep the first
+      const prevIdx = seen.get( key )!;
+      if ( !songFiles[ prevIdx ].id && song.id ) {
+        songFiles[ prevIdx ] = song;
+      }
+      return false;
+    }
+    seen.set( key, idx );
+    return true;
+  });
 
   // Attach book icons from the books table
   try {
@@ -2048,7 +2120,82 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
 
 
 /**
- * Get song usage history and stats.
+ * Build a song history response from a song ID.
+ *
+ * @param songId - the song primary key
+ * @returns JSON-ready history object
+ */
+async function buildSongHistory( songId: number ) {
+  const pool = getPool();
+
+  const [ songRows ] = await pool.query<RowDataPacket[]>(
+    `SELECT s.id, s.name, s.number, s.book, s.ccli, s.license, b.url_template
+     FROM songs s
+     LEFT JOIN books b ON b.name = s.book AND b.enabled = TRUE
+     WHERE s.id = ?`,
+    [ songId ]
+  );
+  if ( songRows.length === 0 ) return null;
+  const song = songRows[ 0 ];
+
+  const [ histRows ] = await pool.query<RowDataPacket[]>(
+    `SELECT sunday_date, slot_type, slot_number, slot_suffix
+     FROM song_selections
+     WHERE song_id = ? AND removed_at IS NULL
+     ORDER BY sunday_date DESC, slot_type, slot_number`,
+    [ songId ]
+  );
+
+  const history = histRows.map( ( r: any ) => ({
+    sundayDate: r.sunday_date,
+    slotType: r.slot_type,
+    slotNumber: r.slot_number,
+    slotSuffix: r.slot_suffix || null,
+  }));
+
+  return {
+    id: song.id,
+    name: song.name,
+    number: song.number || null,
+    book: song.book || null,
+    ccli: song.ccli || null,
+    license: song.license || null,
+    urlTemplate: song.url_template || null,
+    totalUsed: history.length,
+    firstUsed: history.length > 0 ? history[ history.length - 1 ].sundayDate : null,
+    lastUsed: history.length > 0 ? history[ 0 ].sundayDate : null,
+    history,
+  };
+}
+
+
+/**
+ * Get song usage history by ID.
+ *
+ * @param id - song primary key
+ */
+app.get( '/api/songs/:id/history', async ( req: Request, res: Response ) => {
+  const songId = parseInt( req.params.id );
+  if ( isNaN( songId ) || songId <= 0 ) {
+    res.status( 400 ).json({ error: 'Invalid song ID' });
+    return;
+  }
+
+  try {
+    const result = await buildSongHistory( songId );
+    if ( !result ) {
+      res.status( 404 ).json({ error: 'Song not found' });
+      return;
+    }
+    res.json( result );
+  } catch {
+    res.status( 503 ).json({ error: 'Database not available' });
+  }
+});
+
+
+/**
+ * Get song usage history by name (legacy fallback).
  *
  * @query name - song display name (required)
  * @query number - song number (optional)
@@ -2103,7 +2250,6 @@ app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
       if ( rows.length === 1 ) songId = rows[ 0 ].id;
     }
 
-    // Song not in DB — return empty stats
     if ( songId === null ) {
       res.json({
         id: null,
@@ -2120,41 +2266,8 @@ app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
       return;
     }
 
-    // Fetch song details
-    const [ songRows ] = await pool.query<RowDataPacket[]>(
-      'SELECT id, name, number, book, ccli, license FROM songs WHERE id = ?',
-      [ songId ]
-    );
-    const song = songRows[ 0 ];
-
-    // Fetch usage history
-    const [ histRows ] = await pool.query<RowDataPacket[]>(
-      `SELECT sunday_date, slot_type, slot_number, slot_suffix
-       FROM song_selections
-       WHERE song_id = ? AND removed_at IS NULL
-       ORDER BY sunday_date DESC, slot_type, slot_number`,
-      [ songId ]
-    );
-
-    const history = histRows.map( ( r: any ) => ({
-      sundayDate: r.sunday_date,
-      slotType: r.slot_type,
-      slotNumber: r.slot_number,
-      slotSuffix: r.slot_suffix || null,
-    }));
-
-    res.json({
-      id: song.id,
-      name: song.name,
-      number: song.number || null,
-      book: song.book || null,
-      ccli: song.ccli || null,
-      license: song.license || null,
-      totalUsed: history.length,
-      firstUsed: history.length > 0 ? history[ history.length - 1 ].sundayDate : null,
-      lastUsed: history.length > 0 ? history[ 0 ].sundayDate : null,
-      history,
-    });
+    const result = await buildSongHistory( songId );
+    res.json( result );
   } catch {
     res.status( 503 ).json({ error: 'Database not available' });
   }
@@ -2173,7 +2286,7 @@ app.get( '/api/songs/history', async ( req: Request, res: Response ) => {
  * @body book - optional book name (used for find-or-create)
  */
 app.put( '/api/songs/:id', async ( req: Request, res: Response ) => {
-  const { ccli, license, name, number, book } = req.body || {};
+  const { ccli, license, name, number, book, filePath } = req.body || {};
 
   try {
     let songId = parseInt( req.params.id );
@@ -2184,7 +2297,7 @@ app.put( '/api/songs/:id', async ( req: Request, res: Response ) => {
         res.status( 400 ).json({ error: 'name is required when song has no id' });
         return;
       }
-      songId = await findOrCreateSong( name, number || undefined, book || undefined );
+      songId = await findOrCreateSong( name, number || undefined, book || undefined, filePath || undefined );
     }
 
     const pool = getPool();
@@ -2512,7 +2625,7 @@ async function scanFolders() {
 
   console.log( `Scanned ${ sundayFolders.size } folders in ${ outputDir }` );
 
-  // Auto-detect videos and create jobs (only if DB is available)
+  // Auto-detect videos and create ffprobe jobs (only if DB is available)
   try {
     const { healthCheck } = require( './db' );
     if ( !await healthCheck() ) return;
@@ -2520,6 +2633,7 @@ async function scanFolders() {
     for ( const key of Object.keys( sundayFolders.cache ) ) {
       const folder = sundayFolders.cache[ key ];
       const vidsDir = path.join( folder.path, 'Vids' );
+      const sundayDate = key.replace( /-/g, '' );
 
       let videoFiles: string[] = [];
       try {
@@ -2528,27 +2642,22 @@ async function scanFolders() {
         continue; // No Vids/ directory
       }
 
-      const mp4Files = videoFiles.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
-      const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
-
-      if ( productionFile ) {
-        // Production MP4 exists: create transcription job if none exists
-        const productionPath = path.join( vidsDir, productionFile );
-        const job = await createJobIfNotExists({
-          type: 'transcription',
-          sunday_date: key.replace( /-/g, '' ),
-          input_path: productionPath,
-          output_path: productionPath.replace( /\.mp4$/i, '.vtt' ),
-          metadata: { whisper_model: 'large-v3', language: 'en' },
-        });
+      // Create ffprobe jobs for raw video files (.mp4, .mts)
+      // Skip production files — their ffprobe is chained after transcription completes
+      const probeFiles = videoFiles.filter( f =>
+        /\.(mp4|mts)$/i.test( f ) && !/^\d{8}-production\.mp4$/i.test( f )
+      );
+      for ( const file of probeFiles ) {
+        const inputPath = toJobPath( path.join( vidsDir, file ) );
+        const job = await createProbeJobIfNotExists( sundayDate, inputPath );
         if ( job ) {
           io.emit( 'job:created', job );
-          console.log( `[JOBS] Auto-created transcription job #${ job.id } for ${ key }` );
+          console.log( `[JOBS] Auto-created ffprobe job #${ job.id } for ${ file }` );
         }
       }
     }
   } catch ( err ) {
-    // DB not available or other error — silently skip job detection
+    console.error( '[JOBS] Error during ffprobe auto-detection:', err );
   }
 
   // Sync song/chorus/closing shortcuts to song_selections table
@@ -2608,52 +2717,38 @@ async function scanFolders() {
  * Runs once per hour. Only deletes one file per invocation for safety.
  */
 async function cleanupOldestMts() {
-  const outputDir = process.env.outputDirectory || process.env.OUTPUT_DIRECTORY || './output';
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth( sixMonthsAgo.getMonth() - 6 );
+  const oldest = await getOldestMtsVideo();
+  if ( !oldest ) return;
 
-  let oldest: { filePath: string; mtime: Date } | null = null;
+  // Resolve relative path to absolute for deletion
+  const rootPath = config.rootPath || '%OneDriveConsumer%';
+  const absolutePath = resolveToAbsolutePath( path.join( rootPath, oldest.input_path ) );
 
-  // Walk all YYYYMMDD folders (top-level, archived YYYY/, backlog) looking for MTS files
-  for await ( const folder of getSubFolders( outputDir ) ) {
-    const folderName = path.basename( folder );
-
-    // Only look in Vids/ directories
-    if ( folderName !== 'Vids' ) continue;
-
-    let files: string[];
-    try {
-      files = await fs.promises.readdir( folder );
-    } catch {
-      continue;
-    }
-
-    for ( const file of files ) {
-      if ( !file.toLowerCase().endsWith( '.mts' ) ) continue;
-
-      const filePath = path.join( folder, file );
-      try {
-        const stat = await fs.promises.stat( filePath );
-        if ( stat.mtime < sixMonthsAgo ) {
-          if ( !oldest || stat.mtime < oldest.mtime ) {
-            oldest = { filePath, mtime: stat.mtime };
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
+  // Verify file still exists before deleting
+  if ( !fs.existsSync( absolutePath ) ) {
+    await deleteVideo( oldest.input_path );
+    return;
   }
 
-  if ( oldest ) {
+  try {
+    await fs.promises.unlink( absolutePath );
+    console.log( `[CLEANUP] Deleted oldest MTS: ${ oldest.filename } (created: ${ oldest.file_created_at })` );
+
+    // Remove video row and cancel ffprobe job
+    await deleteVideo( oldest.input_path );
     try {
-      const ageMs = Date.now() - oldest.mtime.getTime();
-      const ageMonths = Math.round( ageMs / ( 30.44 * 24 * 60 * 60 * 1000 ) );
-      await fs.promises.unlink( oldest.filePath );
-      console.log( `[CLEANUP] Deleted oldest MTS: ${ oldest.filePath } (age: ~${ ageMonths } months)` );
-    } catch ( err ) {
-      console.error( `[CLEANUP] Failed to delete MTS: ${ oldest.filePath }`, err );
+      if ( await healthCheck() ) {
+        const pool = getPool();
+        await pool.query(
+          `UPDATE jobs SET status = 'cancelled' WHERE type = 'ffprobe' AND input_path = ? AND status IN ('completed', 'pending', 'queued')`,
+          [ oldest.input_path ]
+        );
+      }
+    } catch {
+      // DB cleanup is best-effort
     }
+  } catch ( err ) {
+    console.error( `[CLEANUP] Failed to delete MTS: ${ absolutePath }`, err );
   }
 }
 
@@ -3227,6 +3322,51 @@ async function scheduleFolderCreation() {
 
 
 /**
+ * Remove date-based shortcuts from the template directory for past Sundays.
+ * Deletes any .lnk file matching "YYYY-MM-DD[ TODO].lnk" where the date is today or earlier.
+ * Runs every Monday at midnight (after Sunday's service is over).
+ */
+async function cleanupPastShortcuts() {
+  const templateDir = resolveToAbsolutePath( config.templateDirectory );
+  const today = new Date();
+  today.setHours( 0, 0, 0, 0 );
+
+  let files: string[];
+  try {
+    files = await fs.promises.readdir( templateDir );
+  } catch ( err ) {
+    console.error( '[CLEANUP] Cannot read template directory:', err );
+    return;
+  }
+
+  const datePattern = /^(\d{4}-\d{2}-\d{2})(?:\s+TODO)?\.lnk$/i;
+  let deleted = 0;
+
+  for ( const file of files ) {
+    const match = file.match( datePattern );
+    if ( !match ) continue;
+
+    const fileDate = new Date( match[ 1 ] + 'T00:00:00' );
+    if ( isNaN( fileDate.getTime() ) ) continue;
+
+    if ( fileDate <= today ) {
+      try {
+        await fs.promises.unlink( path.join( templateDir, file ) );
+        console.log( `[CLEANUP] Removed past shortcut: ${ file }` );
+        deleted++;
+      } catch ( err ) {
+        console.error( `[CLEANUP] Failed to remove shortcut: ${ file }`, err );
+      }
+    }
+  }
+
+  if ( deleted > 0 ) {
+    console.log( `[CLEANUP] Removed ${ deleted } past shortcut(s)` );
+  }
+}
+
+
+/**
  * Set up Express endpoints (placeholder for future migration of route handlers)
  */
 function setupExpressEndpoints() {
@@ -3267,6 +3407,8 @@ setupExpressEndpoints();
 
   // Schedule: 2nd Monday of every month at midnight
   schedule.scheduleJob( '0 0 * * 1', scheduleFolderCreation );
+  // Cleanup past Sunday shortcuts every Monday at midnight
+  schedule.scheduleJob( '0 0 * * 1', cleanupPastShortcuts );
   schedule.scheduleJob( '* * * * *', scanFolders );
   // Recover stale jobs every 2 minutes
   schedule.scheduleJob( '*/2 * * * *', () => recoverStaleJobs( io ) );

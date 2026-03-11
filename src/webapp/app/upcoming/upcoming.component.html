@@ -145,7 +145,6 @@
                   [class.no-ccli]="!c.ccli"
                   [matTooltip]="!c.ccli ? 'Missing CCLI license' : ''">Chorus {{ ci + 1 }}</span>
             <button mat-stroked-button class="chorus-button"
-                    [disabled]="isWeekLocked( week )"
                     (click)="openSongDetail( c )">
               {{ songDisplay( c ) }}
             </button>
@@ -193,7 +192,7 @@
                 <ng-template #slotLoaded1>
                   <button mat-stroked-button class="song-button"
                           [class.empty]="!week.selection?.songs?.[slotId]"
-                          [disabled]="isWeekLocked( week )"
+                          [disabled]="isWeekLocked( week ) && !week.selection?.songs?.[slotId]"
                           (click)="week.selection?.songs?.[slotId] ? openSongDetail( week.selection!.songs![slotId]! ) : selectSong( wi, slotId )">
                     <mat-icon *ngIf="!week.selection?.songs?.[slotId]">add</mat-icon>
                     {{ songDisplay( week.selection?.songs?.[slotId] ?? null ) }}
@@ -265,7 +264,7 @@
                 <ng-template #slotLoaded2>
                   <button mat-stroked-button class="song-button"
                           [class.empty]="!week.selection?.songs?.[slotId]"
-                          [disabled]="isWeekLocked( week )"
+                          [disabled]="isWeekLocked( week ) && !week.selection?.songs?.[slotId]"
                           (click)="week.selection?.songs?.[slotId] ? openSongDetail( week.selection!.songs![slotId]! ) : selectSong( wi, slotId )">
                     <mat-icon *ngIf="!week.selection?.songs?.[slotId]">add</mat-icon>
                     {{ songDisplay( week.selection?.songs?.[slotId] ?? null ) }}
@@ -323,7 +322,6 @@
               — {{ week.folder?.sermonSpeaker }}
             </span>
             <button mat-icon-button class="sermon-ellipsis"
-                    [disabled]="isWeekLocked( week )"
                     (click)="openSermonPicker( week )"
                     matTooltip="Edit sermon info">
               <mat-icon>more_horiz</mat-icon>
@@ -343,7 +341,7 @@
                 <ng-template #slotLoaded3>
                   <button mat-stroked-button class="song-button"
                           [class.empty]="!week.selection?.songs?.[slotId]"
-                          [disabled]="isWeekLocked( week )"
+                          [disabled]="isWeekLocked( week ) && !week.selection?.songs?.[slotId]"
                           (click)="week.selection?.songs?.[slotId] ? openSongDetail( week.selection!.songs![slotId]! ) : selectSong( wi, slotId )">
                     <mat-icon *ngIf="!week.selection?.songs?.[slotId]">add</mat-icon>
                     {{ songDisplay( week.selection?.songs?.[slotId] ?? null ) }}

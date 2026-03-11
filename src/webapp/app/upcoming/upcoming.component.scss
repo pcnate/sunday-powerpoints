@@ -211,7 +211,6 @@
 
     .chorus-button,
     .song-button {
-      pointer-events: none;
       border-color: transparent !important;
 
       // Override Angular Material disabled text graying
@@ -226,8 +225,7 @@
     }
 
     .add-chorus-button,
-    .slot-menu-button,
-    .sermon-ellipsis {
+    .slot-menu-button {
       display: none;
     }
   }

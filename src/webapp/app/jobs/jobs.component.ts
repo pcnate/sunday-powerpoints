@@ -12,7 +12,7 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatCardModule } from '@angular/material/card';
-import { Subject, takeUntil, interval } from 'rxjs';
+import { Subject, takeUntil, interval, merge, debounceTime } from 'rxjs';
 import { SocketService } from '../../socket.service';
 
 
@@ -105,11 +105,11 @@ export class JobsComponent implements OnInit, OnDestroy {
     this.loadJobs();
     this.loadWorkers();
 
-    // Refresh jobs on socket events
-    this.socketService.on( 'job:created' ).pipe( takeUntil( this.destroy$ ) )
-      .subscribe( () => this.loadJobs() );
-
-    this.socketService.on( 'job:updated' ).pipe( takeUntil( this.destroy$ ) )
+    // Refresh jobs on socket events (debounced to avoid request storms)
+    merge(
+      this.socketService.on( 'job:created' ),
+      this.socketService.on( 'job:updated' ),
+    ).pipe( debounceTime( 500 ), takeUntil( this.destroy$ ) )
       .subscribe( () => this.loadJobs() );
 
     // Periodic refresh for workers (they update via heartbeat, no socket event)

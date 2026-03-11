@@ -1,4 +1,4 @@
-export type JobType = 'video-alignment' | 'transcription' | 'claude-processing' | 'transcode';
+export type JobType = 'transcription' | 'claude-processing' | 'transcode' | 'ffprobe';
 export type JobStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
@@ -97,4 +97,28 @@ export interface WorkerInfo {
   jobs_completed: number;
   jobs_failed: number;
   status: 'idle' | 'executing' | 'stale';
+}
+
+export type VideoStatus = 'pending' | 'completed' | 'failed';
+
+export interface VideoRecord {
+  id: number;
+  input_path: string;
+  sunday_date: string;
+  filename: string;
+  status: VideoStatus;
+  job_id: number | null;
+  duration_secs: number | null;
+  duration_timecode: string | null;
+  framerate: number | null;
+  width: number | null;
+  height: number | null;
+  video_codec: string | null;
+  audio_codec: string | null;
+  audio_streams: number | null;
+  bitrate: number | null;
+  file_size: number | null;
+  file_created_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
 }

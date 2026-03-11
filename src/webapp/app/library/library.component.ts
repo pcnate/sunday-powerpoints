@@ -1,5 +1,5 @@
 import { Component, OnInit } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Location, CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -63,6 +63,7 @@ export class LibraryComponent implements OnInit {
   selectedBook = '';
   loading = true;
   displayedRowCount = 0;
+  private pendingGridFilter: Record<string, unknown> | null = null;
 
   /**
    * AG Grid dark theme matching the app's Bootstrap-dark palette.
@@ -172,8 +173,24 @@ export class LibraryComponent implements OnInit {
 
   constructor(
     private http: HttpClient,
-    private dialog: MatDialog
-  ) {}
+    private dialog: MatDialog,
+    private location: Location
+  ) {
+    const params = new URLSearchParams( window.location.search );
+    const book = params.get( 'book' );
+    const q = params.get( 'q' );
+    const grid = params.get( 'grid' );
+
+    if ( book ) this.selectedBook = book;
+    if ( q ) this.searchText = q;
+    if ( grid ) {
+      try {
+        this.pendingGridFilter = JSON.parse( atob( grid ) );
+      } catch {
+        // ignore malformed grid param
+      }
+    }
+  }
 
 
   /**
@@ -243,6 +260,7 @@ export class LibraryComponent implements OnInit {
 
     // Defer count update to next tick so grid processes the new rowData first
     setTimeout( () => this.updateDisplayedRowCount() );
+    this.updateRoute();
   }
 
 
@@ -271,6 +289,10 @@ export class LibraryComponent implements OnInit {
    */
   onGridReady( event: GridReadyEvent ): void {
     this.gridApi = event.api;
+    if ( this.pendingGridFilter ) {
+      this.gridApi.setFilterModel( this.pendingGridFilter );
+      this.pendingGridFilter = null;
+    }
     this.updateDisplayedRowCount();
   }
 
@@ -280,6 +302,25 @@ export class LibraryComponent implements OnInit {
    */
   onFilterChanged(): void {
     this.updateDisplayedRowCount();
+    this.updateRoute();
+  }
+
+
+  /**
+   * Update the browser URL to reflect current filter state.
+   */
+  private updateRoute(): void {
+    const params = new URLSearchParams();
+    if ( this.selectedBook ) params.set( 'book', this.selectedBook );
+    if ( this.searchText.trim() ) params.set( 'q', this.searchText.trim() );
+    if ( this.gridApi ) {
+      const model = this.gridApi.getFilterModel();
+      if ( model && Object.keys( model ).length > 0 ) {
+        params.set( 'grid', btoa( JSON.stringify( model ) ) );
+      }
+    }
+    const qs = params.toString();
+    this.location.replaceState( '/library' + ( qs ? '?' + qs : '' ) );
   }
 
 
@@ -337,6 +378,7 @@ export class LibraryComponent implements OnInit {
       width: '550px',
       maxHeight: '80vh',
       data: {
+        id: song.id,
         name: song.name,
         number: song.number,
         book: song.book,
@@ -351,7 +393,8 @@ export class LibraryComponent implements OnInit {
     dialogRef.afterClosed().subscribe( ( result: { ccli: string | null; license: string | null } | undefined ) => {
       if ( !result ) return;
       song.ccli = result.ccli || undefined;
-      this.gridApi.refreshCells({ columns: [ 'ccli' ] });
+      song.license = result.license || undefined;
+      this.gridApi.refreshCells({ columns: [ 'ccli', 'license' ] });
     });
   }
 }

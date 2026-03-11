@@ -170,16 +170,16 @@ These steps only become relevant after the Sunday date has passed. The Outstandi
 | Step | Detection | Auto/Manual | Job Type |
 |------|-----------|-------------|----------|
 | 1. Raw video files | `hasMp4` — `.mp4` files in `Vids/` subdirectory | Manual (file drop) | — |
-| 2. Kdenlive project | `hasKdenlive` — `*.kdenlive` file in folder | Auto | `video-alignment` |
-| 3. Production export | `hasProduction` — `YYYYMMDD-production.mp4` in folder | Manual (edit + render in Kdenlive) | — |
+| 2. Kdenlive project | `hasKdenlive` — `*.kdenlive` file in folder | Manual (user creates/edits) | — |
+| 3. Production export | `hasProduction` — `YYYYMMDD-production.mp4` in folder | Auto | `transcode` |
 | 4. Transcription | `hasTranscription` — `*.vtt` file in folder | Auto | `transcription` |
 | 5. Claude output | `hasSermonMd` — `YYYYMMDD-sermon.md` in folder | Auto | `claude-processing` |
 | 6. YouTube upload | `youtubeUrl` — URL stored in folder metadata JSON | Manual | — |
 | 7. Archive | Folder moved to `YYYY/` subdirectory | Manual or scheduled | — |
 
 **Job chaining:**
-- Raw video detected → auto-creates `video-alignment` job → generates Kdenlive project
-- `YYYYMMDD-production.mp4` detected → auto-creates `transcription` job → generates `.vtt`
+- Kdenlive approved → creates `transcode` job → renders `YYYYMMDD-production.mp4`
+- Transcode completed → auto-creates `transcription` job → generates `.vtt`
 - Transcription completed → auto-creates `claude-processing` job → generates `YYYYMMDD-sermon.md`
 
 **YouTube tracking:** The upload is manual (user uploads to YouTube, then pastes the URL). The URL is stored in MySQL (e.g., a `youtube_url` column on a folders/sundays table) as the source of truth, and optionally written to the folder's metadata JSON for filesystem-level access. The Outstanding tab checks for a non-empty `youtubeUrl` to mark this step complete. The URL can also be displayed as a clickable link in the UI.
@@ -243,4 +243,38 @@ The button should be:
 - Visible only when a presentation exists but is not yet approved
 - Disabled when no presentation exists
 - Hidden when already approved (or show a green checkmark indicator)
+
+## Tool Progress Feedback (Research)
+
+Each tool in the worker pipeline provides different progress output. The melt runner is fully implemented; whisper and ffmpeg are documented here for future implementation.
+
+### Melt — Implemented
+- Run with `-progress` flag, outputs `percentage: N` (integer 0–100) on stdout
+- Current runner (`worker/src/runners/transcode.rs`) parses this, sends logs every 5 seconds
+- Pattern: spawn → BufReader line-by-line → parse percentage → `api.send_logs()`
+
+### FFmpeg — Available but not used in a runner
+- Stderr output: `frame= 1234 fps=60 q=28.0 size= 12345kB time=00:00:30.00 bitrate=3456.0kbits/s speed=2.4x`
+- Machine-parseable mode: `-progress pipe:1` gives key=value pairs (`out_time`, `progress=continue/end`)
+- `ffmpeg_path` is configured but no runner uses it yet
+
+### Whisper — Stub runner, tool not yet installed
+
+**Implementation options (ranked):**
+
+| | faster-whisper | whisper.cpp | OpenAI whisper |
+|---|---|---|---|
+| **Speed** | 4-8x faster (CTranslate2) | 2-4x faster | Baseline |
+| **VRAM** | ~50% less | Low | High |
+| **Progress** | tqdm bar on stderr (parseable) | `progress = XX%` on stderr | Segment timestamps only (no %) |
+| **Install** | `pip install faster-whisper` | Build or download binary | `pip install openai-whisper` |
+| **GPU** | CUDA via CTranslate2 | CUDA or CPU | CUDA via PyTorch |
+| **VTT output** | Programmatic (needs wrapper) | Native VTT/SRT | Native VTT/SRT |
+
+**Recommendation:** faster-whisper for speed/VRAM gains, or whisper.cpp for simplest progress parsing and no Python dependency.
+
+### Existing progress infrastructure
+- `api.send_logs(job_id, entries)` → `POST /api/jobs/{id}/logs` → Socket.IO `job:log`
+- `api.heartbeat(job_id, progress)` → `POST /api/jobs/{id}/heartbeat` with optional `progress: f64` (0.0–1.0)
+- Stubs to implement: `worker/src/runners/transcription.rs`, `worker/src/runners/claude.rs`
 

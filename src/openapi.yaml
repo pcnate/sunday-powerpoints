@@ -560,7 +560,7 @@ paths:
           in: query
           schema:
             type: string
-          description: Comma-separated types (video-alignment, transcription, claude-processing, transcode)
+          description: Comma-separated types (transcription, claude-processing, transcode)
         - name: sunday_date
           in: query
           schema:
@@ -1057,7 +1057,7 @@ components:
           type: integer
         type:
           type: string
-          enum: [video-alignment, transcription, claude-processing, transcode]
+          enum: [transcription, claude-processing, transcode, ffprobe]
         status:
           type: string
           enum: [pending, queued, processing, completed, failed, cancelled]
@@ -1144,7 +1144,7 @@ components:
       properties:
         type:
           type: string
-          enum: [video-alignment, transcription, claude-processing, transcode]
+          enum: [transcription, claude-processing, transcode, ffprobe]
         sunday_date:
           type: string
           pattern: '^\d{8}$'
@@ -1175,7 +1175,7 @@ components:
           type: array
           items:
             type: string
-            enum: [video-alignment, transcription, claude-processing, transcode]
+            enum: [transcription, claude-processing, transcode, ffprobe]
 
     HeartbeatRequest:
       type: object

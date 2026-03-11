@@ -14,6 +14,7 @@ import { DraggableDialogDirective } from '../shared/draggable-dialog.directive';
 
 
 export interface SongDetailDialogData {
+  id?: number;
   name: string;
   number?: string;
   book?: string;
@@ -32,6 +33,7 @@ interface SongHistory {
   book: string | null;
   ccli: string | null;
   license: string | null;
+  urlTemplate: string | null;
   totalUsed: number;
   firstUsed: string | null;
   lastUsed: string | null;
@@ -80,7 +82,13 @@ interface UsageEntry {
         </div>
         <div class="info-item" *ngIf="data.number">
           <span class="info-label">Number</span>
-          <span class="info-value">{{ data.number }}</span>
+          <span class="info-value">
+            {{ data.number }}
+            <a *ngIf="bookUrl" [href]="bookUrl" target="_blank" rel="noopener"
+               class="book-link" matTooltip="View online">
+              <mat-icon>open_in_new</mat-icon>
+            </a>
+          </span>
         </div>
       </div>
 
@@ -385,6 +393,25 @@ interface UsageEntry {
       color: #9ec5fe;
     }
 
+    .book-link {
+      color: #6ea8fe;
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+      vertical-align: middle;
+      margin-left: 4px;
+    }
+
+    .book-link mat-icon {
+      font-size: 14px;
+      width: 14px;
+      height: 14px;
+    }
+
+    .book-link:hover {
+      color: #9ec5fe;
+    }
+
     .save-spinner {
       font-size: 18px;
       width: 18px;
@@ -410,6 +437,7 @@ interface UsageEntry {
 export class SongDetailDialogComponent implements OnInit {
 
   songHistory: SongHistory | null = null;
+  bookUrl: string | null = null;
   loading = true;
   copyIcon = 'content_copy';
   copyTooltip = 'Copy path';
@@ -434,16 +462,27 @@ export class SongDetailDialogComponent implements OnInit {
    * Fetch usage history from the server on init.
    */
   ngOnInit(): void {
-    const params = new URLSearchParams();
-    params.set( 'name', this.data.name );
-    if ( this.data.number ) params.set( 'number', this.data.number );
-    if ( this.data.book ) params.set( 'book', this.data.book );
+    let url: string;
+    if ( this.data.id ) {
+      url = `/api/songs/${ this.data.id }/history`;
+    } else {
+      const params = new URLSearchParams();
+      params.set( 'name', this.data.name );
+      if ( this.data.number ) params.set( 'number', this.data.number );
+      if ( this.data.book ) params.set( 'book', this.data.book );
+      url = `/api/songs/history?${ params.toString() }`;
+    }
 
-    this.http.get<SongHistory>( `/api/songs/history?${ params.toString() }` ).subscribe({
+    this.http.get<SongHistory>( url ).subscribe({
       next: ( result ) => {
         this.songHistory = result;
         this.ccli = result.ccli || '';
         this.license = result.license || '';
+        if ( result.urlTemplate && result.number ) {
+          this.bookUrl = result.urlTemplate.replace(
+            '{number}', String( parseInt( result.number, 10 ) )
+          );
+        }
         this.loading = false;
       },
       error: () => {
@@ -492,6 +531,7 @@ export class SongDetailDialogComponent implements OnInit {
       name: this.data.name,
       number: this.data.number || null,
       book: this.data.book || null,
+      filePath: this.data.filePath || null,
     }).subscribe({
       next: ( res ) => {
         if ( this.songHistory ) {

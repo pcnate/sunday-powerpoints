@@ -6,8 +6,10 @@ import {
   Job, JobLog, CreateJobRequest, ClaimJobRequest, HeartbeatRequest,
   CompleteJobRequest, FailJobRequest, JobLogEntry, JobListQuery, WorkerInfo
 } from '../types/job';
+import { getVideoByPath, createPendingVideo, completeVideo, failVideo } from '../videos-db';
+import type { FfprobeMetadata } from '../videos-db';
 
-const JOB_TYPES = [ 'video-alignment', 'transcription', 'claude-processing', 'transcode' ];
+const JOB_TYPES = [ 'transcription', 'claude-processing', 'transcode', 'ffprobe' ];
 const JOB_STATUSES = [ 'pending', 'queued', 'processing', 'completed', 'failed', 'cancelled' ];
 
 /** Stale threshold — workers not seen in this many ms are marked stale. */
@@ -152,11 +154,14 @@ export function createJobRoutes( io: SocketIOServer ): Router {
 
       const pool = getPool();
 
-      // Check for duplicate pending/processing job of same type + sunday_date
-      const [ existing ] = await pool.query<RowDataPacket[]>(
-        `SELECT id FROM jobs WHERE type = ? AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
-        [ body.type, body.sunday_date ]
-      );
+      // Check for duplicate pending/processing job
+      // ffprobe deduplicates by type + input_path (multiple files per date)
+      // Other types deduplicate by type + sunday_date
+      const dedupQuery = body.type === 'ffprobe'
+        ? `SELECT id FROM jobs WHERE type = ? AND input_path = ? AND status IN ('pending', 'queued', 'processing')`
+        : `SELECT id FROM jobs WHERE type = ? AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`;
+      const dedupParam = body.type === 'ffprobe' ? body.input_path : body.sunday_date;
+      const [ existing ] = await pool.query<RowDataPacket[]>( dedupQuery, [ body.type, dedupParam ] );
       if ( existing.length > 0 ) {
         res.status( 409 ).json({ error: 'A job of this type already exists for this date', existing_id: existing[ 0 ].id });
         return;
@@ -542,6 +547,11 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       io.emit( 'job:updated', failedJob );
       console.log( `[JOBS] Job #${ failedJob.id } (${ failedJob.type }) failed: ${ body.error_message }${ willRetry ? ` (will retry, attempt ${ failedJob.retry_count }/${ failedJob.max_retries })` : ' (no retries left)' }` );
 
+      // Mark video row as failed when ffprobe permanently fails
+      if ( !willRetry && failedJob.type === 'ffprobe' ) {
+        await failVideo( failedJob.input_path );
+      }
+
       res.json({ success: true, will_retry: willRetry, retry_count: failedJob.retry_count });
     } catch ( err ) {
       console.error( '[JOBS] Error failing job:', err );
@@ -596,14 +606,6 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
   const pool = getPool();
 
   switch ( job.type ) {
-    case 'video-alignment': {
-      // The alignment job produces scene_changes. The server will generate a Kdenlive project.
-      // No auto-chain — user must manually edit + render the production MP4.
-      // scanFolders() will detect the production MP4 and create a transcription job.
-      console.log( `[JOBS] Video alignment complete for ${ job.sunday_date }. Kdenlive project should be generated.` );
-      break;
-    }
-
     case 'transcode': {
       // Transcode complete → production MP4 exists → create transcription job
       const outputPath = job.output_path;
@@ -641,6 +643,19 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
       const chainedJob = parseJobRow( transcodeRows[ 0 ] );
       io.emit( 'job:created', chainedJob );
       console.log( `[JOBS] Chained transcription job #${ chainedJob.id } from transcode job #${ job.id }` );
+
+      // Release held ffprobe job for the production file (created at approve time)
+      const [ heldRows ] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM jobs WHERE type = 'ffprobe' AND input_path = ? AND status = 'queued'`,
+        [ outputPath ]
+      );
+      if ( heldRows.length > 0 ) {
+        await pool.query( `UPDATE jobs SET status = 'pending' WHERE id = ?`, [ heldRows[ 0 ].id ] );
+        const [ releasedRows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ heldRows[ 0 ].id ] );
+        const releasedJob = parseJobRow( releasedRows[ 0 ] );
+        io.emit( 'job:updated', releasedJob );
+        console.log( `[JOBS] Released held ffprobe job #${ releasedJob.id } for production file` );
+      }
       break;
     }
 
@@ -685,6 +700,32 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
       const newJob = parseJobRow( newRows[ 0 ] );
       io.emit( 'job:created', newJob );
       console.log( `[JOBS] Chained claude-processing job #${ newJob.id } from transcription job #${ job.id }` );
+      break;
+    }
+
+    case 'ffprobe': {
+      // Update videos table with ffprobe results
+      if ( job.metadata ) {
+        const meta = job.metadata as Record<string, unknown>;
+        await completeVideo( job.input_path, {
+          duration_secs: meta.duration_secs as number | undefined,
+          duration_timecode: meta.duration_timecode as string | undefined,
+          framerate: meta.framerate as number | undefined,
+          width: meta.width as number | undefined,
+          height: meta.height as number | undefined,
+          video_codec: meta.video_codec as string | undefined,
+          audio_codec: meta.audio_codec as string | undefined,
+          audio_streams: meta.audio_streams as number | undefined,
+          bitrate: meta.bitrate as number | undefined,
+          file_size: meta.file_size as number | undefined,
+          created_at: meta.created_at as string | undefined,
+        } );
+      }
+
+      // ffprobe jobs are terminal — no chaining.
+      // Production file ffprobes are created after transcription completes.
+      // Raw file ffprobes capture metadata for Kdenlive duration/MTS purge.
+      console.log( `[JOBS] ffprobe complete for ${ require( 'path' ).basename( job.input_path ) }` );
       break;
     }
 
@@ -779,6 +820,78 @@ export async function createJobIfNotExists( data: CreateJobRequest ): Promise<Jo
   const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
   return parseJobRow( rows[ 0 ] );
 }
+
+/**
+ * Create an ffprobe job if no video row exists for the same input_path.
+ * Deduplicates via the videos table (any status) since multiple
+ * video files per date each need their own probe.
+ *
+ * @param sundayDate - YYYYMMDD folder date
+ * @param inputPath - relative path to the video file
+ * @returns the created job, or null if a duplicate exists
+ */
+export async function createProbeJobIfNotExists( sundayDate: string, inputPath: string ): Promise<Job | null> {
+  const pool = getPool();
+
+  // Check videos table for dedup (any status = already tracked)
+  const existing = await getVideoByPath( inputPath );
+  if ( existing ) return null;
+
+  const filename = require( 'path' ).basename( inputPath );
+
+  const [ result ] = await pool.query<ResultSetHeader>(
+    `INSERT INTO jobs (type, status, priority, sunday_date, input_path, metadata, max_retries)
+     VALUES ('ffprobe', 'pending', 3, ?, ?, ?, 3)`,
+    [
+      sundayDate,
+      inputPath,
+      JSON.stringify({ filename }),
+    ]
+  );
+
+  // Insert placeholder video row
+  await createPendingVideo( sundayDate, inputPath, filename, result.insertId );
+
+  const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
+  return parseJobRow( rows[ 0 ] );
+}
+
+
+/**
+ * Create an ffprobe job in 'queued' (held) status for a production file.
+ * The job won't be claimed by workers until released to 'pending'.
+ * Also inserts a pending video row for dedup.
+ *
+ * @param sundayDate - YYYYMMDD folder date
+ * @param inputPath - relative path to the production MP4
+ * @param parentJobId - the transcode job ID that will release this hold
+ * @returns the created held job, or null if a video row already exists
+ */
+export async function createHeldProbeJob( sundayDate: string, inputPath: string, parentJobId: number ): Promise<Job | null> {
+  const pool = getPool();
+
+  const existing = await getVideoByPath( inputPath );
+  if ( existing ) return null;
+
+  const filename = require( 'path' ).basename( inputPath );
+
+  const [ result ] = await pool.query<ResultSetHeader>(
+    `INSERT INTO jobs (type, status, priority, sunday_date, input_path, metadata, parent_job_id, max_retries)
+     VALUES ('ffprobe', 'queued', 3, ?, ?, ?, ?, 3)`,
+    [
+      sundayDate,
+      inputPath,
+      JSON.stringify({ filename }),
+      parentJobId,
+    ]
+  );
+
+  await createPendingVideo( sundayDate, inputPath, filename, result.insertId );
+
+  const [ rows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
+  return parseJobRow( rows[ 0 ] );
+}
+
 
 // --- Helpers ---
 
