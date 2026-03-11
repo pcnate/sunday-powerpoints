@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use serde::{ Deserialize, Serialize };
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
@@ -34,8 +35,10 @@ struct StatusResponse {
     uptime_secs: u64,
     worker_id: String,
     server_url: String,
+    schedule_enabled: bool,
     shift_start: String,
     shift_end: String,
+    force_on_shift: bool,
 }
 
 
@@ -45,6 +48,7 @@ struct ConfigUpdate {
     server_url: Option<String>,
     worker_id: Option<String>,
     types: Option<Vec<String>>,
+    schedule_enabled: Option<bool>,
     shift_start: Option<String>,
     shift_end: Option<String>,
     poll_interval_secs: Option<u64>,
@@ -53,9 +57,58 @@ struct ConfigUpdate {
     web_ui_port: Option<u16>,
     whisper_path: Option<String>,
     whisper_model: Option<String>,
+    whisper_compute_type: Option<String>,
     claude_path: Option<String>,
     ffmpeg_path: Option<String>,
+    ffprobe_path: Option<String>,
     melt_path: Option<String>,
+    melt_video_bitrate: Option<String>,
+    melt_audio_bitrate: Option<String>,
+    output_directory: Option<String>,
+    tool_env: Option<HashMap<String, HashMap<String, String>>>,
+}
+
+
+/// Browse request for POST /api/browse (directory listing).
+#[derive( Deserialize )]
+struct BrowseRequest {
+    path: Option<String>,
+    extensions: Option<Vec<String>>,
+}
+
+
+/// A single entry in a directory listing.
+#[derive( Serialize )]
+struct BrowseEntry {
+    name: String,
+    is_dir: bool,
+    size: u64,
+}
+
+
+/// Browse response for POST /api/browse (directory listing).
+#[derive( Serialize )]
+struct BrowseResponse {
+    path: String,
+    entries: Vec<BrowseEntry>,
+}
+
+
+/// Test tool request for POST /api/test-tool.
+#[derive( Deserialize )]
+struct TestToolRequest {
+    command: String,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+}
+
+
+/// Test tool response for POST /api/test-tool.
+#[derive( Serialize )]
+struct TestToolResponse {
+    success: bool,
+    output: Option<String>,
+    error: Option<String>,
 }
 
 
@@ -99,8 +152,13 @@ pub async fn run(
         .route( "/api/config", get( get_config_handler ) )
         .route( "/api/config", post( update_config_handler ) )
         .route( "/api/queue", get( queue_handler ) )
+        .route( "/api/queue/{id}", get( job_detail_handler ) )
         .route( "/api/queue/{id}/cancel", put( cancel_job_handler ) )
         .route( "/api/scheduler/pause", post( pause_handler ) )
+        .route( "/api/scheduler/run-once", post( run_once_handler ) )
+        .route( "/api/scheduler/force-on-shift", post( force_on_shift_handler ) )
+        .route( "/api/browse", post( browse_handler ) )
+        .route( "/api/test-tool", post( test_tool_handler ) )
         .layer( CorsLayer::permissive() )
         .with_state( shared );
 
@@ -138,18 +196,29 @@ async fn status_handler(
         uptime_secs: snapshot.uptime_secs,
         worker_id: config.worker.id.clone(),
         server_url: config.server.url.clone(),
+        schedule_enabled: config.schedule.enabled,
         shift_start: config.schedule.shift_start.clone(),
         shift_end: config.schedule.shift_end.clone(),
+        force_on_shift: snapshot.force_on_shift,
     } )
 }
 
 
 /// GET /api/config — Return current configuration as JSON.
+///
+/// If `output_directory` is empty, fills it with the resolved
+/// `OneDriveConsumer` environment variable so the UI shows the effective path.
 async fn get_config_handler(
     AxumState( state ): AxumState<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let config = state.app_state.config.read().await;
-    Json( config.clone() )
+    let mut config = state.app_state.config.read().await.clone();
+
+    // Populate output_directory with the env var fallback so the UI shows the effective value
+    if config.paths.output_directory.is_empty() {
+        config.paths.output_directory = std::env::var( "OneDriveConsumer" ).unwrap_or_default();
+    }
+
+    Json( config )
 }
 
 
@@ -169,6 +238,9 @@ async fn update_config_handler(
     }
     if let Some( types ) = update.types {
         config.worker.types = types;
+    }
+    if let Some( enabled ) = update.schedule_enabled {
+        config.schedule.enabled = enabled;
     }
     if let Some( start ) = update.shift_start {
         config.schedule.shift_start = start;
@@ -194,14 +266,32 @@ async fn update_config_handler(
     if let Some( v ) = update.whisper_model {
         config.tools.whisper_model = v;
     }
+    if let Some( v ) = update.whisper_compute_type {
+        config.tools.whisper_compute_type = v;
+    }
     if let Some( v ) = update.claude_path {
         config.tools.claude_path = v;
     }
     if let Some( v ) = update.ffmpeg_path {
         config.tools.ffmpeg_path = v;
     }
+    if let Some( v ) = update.ffprobe_path {
+        config.tools.ffprobe_path = v;
+    }
     if let Some( v ) = update.melt_path {
         config.tools.melt_path = v;
+    }
+    if let Some( v ) = update.melt_video_bitrate {
+        config.tools.melt_video_bitrate = v;
+    }
+    if let Some( v ) = update.melt_audio_bitrate {
+        config.tools.melt_audio_bitrate = v;
+    }
+    if let Some( v ) = update.output_directory {
+        config.paths.output_directory = v;
+    }
+    if let Some( v ) = update.tool_env {
+        config.tools.tool_env = v;
     }
 
     // Save to disk
@@ -236,6 +326,40 @@ async fn queue_handler(
     }
     let limit = params.limit.unwrap_or( 50 );
     url.push_str( &format!( "limit={}", limit ) );
+
+    match state.http_client.get( &url ).send().await {
+        Ok( resp ) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok( body ) => ( StatusCode::OK, Json( body ) ).into_response(),
+                Err( e ) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json( serde_json::json!({ "error": format!( "Parse error: {}", e ) }) ),
+                ).into_response(),
+            }
+        }
+        Ok( resp ) => (
+            StatusCode::BAD_GATEWAY,
+            Json( serde_json::json!({ "error": format!( "Server returned {}", resp.status() ) }) ),
+        ).into_response(),
+        Err( e ) => (
+            StatusCode::BAD_GATEWAY,
+            Json( serde_json::json!({ "error": format!( "Connection failed: {}", e ) }) ),
+        ).into_response(),
+    }
+}
+
+
+/// GET /api/queue/:id — Proxy to Express GET /api/jobs/:id (job + logs).
+async fn job_detail_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+    Path( id ): Path<u32>,
+) -> impl IntoResponse {
+    let config = state.app_state.config.read().await;
+    let url = format!(
+        "{}/api/jobs/{}",
+        config.server.url.trim_end_matches( '/' ),
+        id
+    );
 
     match state.http_client.get( &url ).send().await {
         Ok( resp ) if resp.status().is_success() => {
@@ -305,6 +429,190 @@ async fn pause_handler(
 ) -> impl IntoResponse {
     let _ = state.tray_tx.try_send( TrayCommand::TogglePause );
     Json( serde_json::json!({ "success": true }) )
+}
+
+
+/// POST /api/scheduler/run-once — Request a single job poll cycle.
+async fn run_once_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+) -> impl IntoResponse {
+    let _ = state.tray_tx.try_send( TrayCommand::RunOnce );
+    Json( serde_json::json!({ "success": true }) )
+}
+
+
+/// POST /api/scheduler/force-on-shift — Toggle force on-shift override.
+async fn force_on_shift_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+) -> impl IntoResponse {
+    let _ = state.tray_tx.try_send( TrayCommand::ToggleForceOnShift );
+    // Read the new value after a brief yield to let the scheduler process it
+    tokio::time::sleep( std::time::Duration::from_millis( 50 ) ).await;
+    let forced = *state.app_state.force_on_shift.read().await;
+    Json( serde_json::json!({ "success": true, "force_on_shift": forced }) )
+}
+
+
+/// POST /api/browse — List directory contents or enumerate drives.
+///
+/// If `path` is None/empty, returns available Windows drive letters.
+/// Otherwise lists the directory contents, applying optional extension filters.
+async fn browse_handler(
+    Json( req ): Json<BrowseRequest>,
+) -> impl IntoResponse {
+    let path_str = req.path.unwrap_or_default();
+
+    // No path → enumerate Windows drives
+    if path_str.is_empty() {
+        let mut drives = Vec::new();
+        for letter in b'A'..=b'Z' {
+            let drive = format!( "{}:\\", letter as char );
+            if std::path::Path::new( &drive ).exists() {
+                drives.push( BrowseEntry {
+                    name: drive,
+                    is_dir: true,
+                    size: 0,
+                } );
+            }
+        }
+        return ( StatusCode::OK, Json( BrowseResponse {
+            path: String::new(),
+            entries: drives,
+        } ) ).into_response();
+    }
+
+    // Normalize the path
+    let dir = std::path::Path::new( &path_str );
+    if !dir.exists() || !dir.is_dir() {
+        return ( StatusCode::BAD_REQUEST, Json( serde_json::json!({
+            "error": format!( "Invalid directory: {}", path_str )
+        }) ) ).into_response();
+    }
+
+    let ext_filter: Option<Vec<String>> = req.extensions.map( |exts|
+        exts.iter().map( |e| e.to_lowercase() ).collect()
+    );
+
+    let read_dir = match std::fs::read_dir( dir ) {
+        Ok( rd ) => rd,
+        Err( e ) => {
+            return ( StatusCode::BAD_REQUEST, Json( serde_json::json!({
+                "error": format!( "Cannot read directory: {}", e )
+            }) ) ).into_response();
+        }
+    };
+
+    let mut entries: Vec<BrowseEntry> = Vec::new();
+    for entry in read_dir.flatten() {
+        let metadata = match entry.metadata() {
+            Ok( m ) => m,
+            Err( _ ) => continue,
+        };
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = metadata.is_dir();
+
+        // Apply extension filter to files only
+        if !is_dir
+            && let Some( ref exts ) = ext_filter
+        {
+            let file_ext = std::path::Path::new( &name )
+                .extension()
+                .map( |e| e.to_string_lossy().to_lowercase() )
+                .unwrap_or_default();
+            if !exts.contains( &file_ext ) {
+                continue;
+            }
+        }
+
+        entries.push( BrowseEntry {
+            name,
+            is_dir,
+            size: metadata.len(),
+        } );
+    }
+
+    // Sort: directories first, then alphabetical (case-insensitive)
+    entries.sort_by( |a, b| {
+        b.is_dir.cmp( &a.is_dir )
+            .then_with( || a.name.to_lowercase().cmp( &b.name.to_lowercase() ) )
+    } );
+
+    ( StatusCode::OK, Json( BrowseResponse {
+        path: dir.to_string_lossy().to_string(),
+        entries,
+    } ) ).into_response()
+}
+
+
+/// POST /api/test-tool — Spawn a command with a 10-second timeout.
+async fn test_tool_handler(
+    Json( req ): Json<TestToolRequest>,
+) -> impl IntoResponse {
+    let args = req.args.unwrap_or_default();
+
+    let mut cmd = tokio::process::Command::new( &req.command );
+    cmd.args( &args )
+        .stdout( std::process::Stdio::piped() )
+        .stderr( std::process::Stdio::piped() )
+        .kill_on_drop( true );
+
+    if let Some( ref env_vars ) = req.env {
+        for ( key, value ) in env_vars {
+            cmd.env( key, value );
+        }
+    }
+
+    let child = cmd.spawn();
+
+    let child = match child {
+        Ok( c ) => c,
+        Err( e ) => {
+            return Json( TestToolResponse {
+                success: false,
+                output: None,
+                error: Some( format!( "Failed to spawn: {}", e ) ),
+            } );
+        }
+    };
+
+    let timeout = tokio::time::timeout(
+        std::time::Duration::from_secs( 10 ),
+        child.wait_with_output(),
+    ).await;
+
+    match timeout {
+        Ok( Ok( output ) ) => {
+            let stdout = String::from_utf8_lossy( &output.stdout ).to_string();
+            let stderr = String::from_utf8_lossy( &output.stderr ).to_string();
+            let combined = if stderr.is_empty() {
+                stdout
+            } else if stdout.is_empty() {
+                stderr
+            } else {
+                format!( "{}\n{}", stdout, stderr )
+            };
+
+            Json( TestToolResponse {
+                success: output.status.success(),
+                output: Some( combined ),
+                error: None,
+            } )
+        }
+        Ok( Err( e ) ) => Json( TestToolResponse {
+            success: false,
+            output: None,
+            error: Some( format!( "Process error: {}", e ) ),
+        } ),
+        Err( _ ) => {
+            // child is dropped here, kill_on_drop handles cleanup
+            Json( TestToolResponse {
+                success: false,
+                output: None,
+                error: Some( "Command timed out after 10 seconds".to_string() ),
+            } )
+        }
+    }
 }
 
 
@@ -460,6 +768,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
   </div>
   <div class="status-actions">
     <button class="btn btn-sm btn-outline" id="pauseBtn" onclick="togglePause()">Pause</button>
+    <button class="btn btn-sm btn-outline" id="forceBtn" onclick="toggleForceOnShift()">Force On-Shift</button>
   </div>
 </div>
 <div class="stats" style="margin-bottom:20px">
@@ -487,7 +796,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     </select>
     <select id="queueTypeFilter" onchange="loadQueue()">
       <option value="">All Types</option>
-      <option value="video-alignment">Video Alignment</option>
+      <option value="ffprobe">FFprobe</option>
       <option value="transcode">Transcode</option>
       <option value="transcription">Transcription</option>
       <option value="claude-processing">Claude Processing</option>
@@ -513,7 +822,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
   <div class="form-group">
     <label>Job Types</label>
     <div class="checkbox-group">
-      <label><input type="checkbox" id="type_alignment" value="video-alignment"> Video Alignment</label>
+      <label><input type="checkbox" id="type_ffprobe" value="ffprobe"> FFprobe</label>
       <label><input type="checkbox" id="type_transcode" value="transcode"> Transcode</label>
       <label><input type="checkbox" id="type_transcription" value="transcription"> Transcription</label>
       <label><input type="checkbox" id="type_claude" value="claude-processing"> Claude Processing</label>
@@ -521,7 +830,10 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
   </div>
 
   <h2>Schedule</h2>
-  <div class="row">
+  <div class="checkbox-group" style="margin-bottom:8px">
+    <label><input type="checkbox" id="schedule_enabled"> Enabled</label>
+  </div>
+  <div class="row" id="shift_row">
     <div class="form-group">
       <label for="shift_start">Shift Start</label>
       <input id="shift_start" type="text" placeholder="HH:MM">
@@ -530,6 +842,9 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
       <label for="shift_end">Shift End</label>
       <input id="shift_end" type="text" placeholder="HH:MM">
     </div>
+  </div>
+  <div id="run_once_row" style="display:none;margin-bottom:12px">
+    <button class="btn btn-sm" onclick="runOnce()">Run Next Job</button>
   </div>
 
   <h2>Timing</h2>
@@ -558,6 +873,22 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
       <label for="whisper_model">Model</label>
       <input id="whisper_model" type="text">
     </div>
+    <div class="form-group">
+      <label for="whisper_compute_type">Compute Type</label>
+      <select id="whisper_compute_type">
+        <option value="float16">float16</option>
+        <option value="float32">float32</option>
+        <option value="int8">int8</option>
+        <option value="int8_float16">int8_float16</option>
+        <option value="int8_float32">int8_float32</option>
+        <option value="auto">auto</option>
+        <option value="default">default</option>
+      </select>
+    </div>
+  </div>
+  <div class="form-group">
+    <label for="env_whisper">Whisper Env Vars (KEY=VALUE per line)</label>
+    <textarea id="env_whisper" rows="2" style="width:100%;padding:8px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:monospace;resize:vertical" placeholder="PYTHONIOENCODING=utf-8"></textarea>
   </div>
   <div class="row">
     <div class="form-group">
@@ -568,13 +899,30 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
       <label for="ffmpeg_path">FFmpeg</label>
       <input id="ffmpeg_path" type="text">
     </div>
+    <div class="form-group">
+      <label for="ffprobe_path">FFprobe</label>
+      <input id="ffprobe_path" type="text">
+    </div>
   </div>
   <div class="row">
     <div class="form-group">
       <label for="melt_path">Melt (Kdenlive)</label>
       <input id="melt_path" type="text">
     </div>
-    <div class="form-group"></div>
+    <div class="form-group">
+      <label for="melt_video_bitrate">Video Bitrate</label>
+      <input id="melt_video_bitrate" type="text" placeholder="5000k">
+    </div>
+    <div class="form-group">
+      <label for="melt_audio_bitrate">Audio Bitrate</label>
+      <input id="melt_audio_bitrate" type="text" placeholder="192k">
+    </div>
+  </div>
+
+  <h2>Paths</h2>
+  <div class="form-group">
+    <label for="output_directory">Output Directory (OneDrive sync path)</label>
+    <input id="output_directory" type="text" placeholder="%OneDriveConsumer%">
   </div>
 
   <button onclick="saveConfig()">Save Configuration</button>
@@ -622,11 +970,25 @@ async function loadStatus() {
       btn.textContent = 'Pause';
       btn.className = 'btn btn-sm btn-outline';
     }
+
+    const forceBtn = document.getElementById('forceBtn');
+    if (s.force_on_shift) {
+      forceBtn.textContent = 'Stop Forcing';
+      forceBtn.className = 'btn btn-sm btn-warn';
+    } else {
+      forceBtn.textContent = 'Force On-Shift';
+      forceBtn.className = 'btn btn-sm btn-outline';
+    }
   } catch(e) { console.error('Status fetch failed', e); }
 }
 
 async function togglePause() {
   await fetch('/api/scheduler/pause', { method: 'POST' });
+  setTimeout(loadStatus, 300);
+}
+
+async function toggleForceOnShift() {
+  await fetch('/api/scheduler/force-on-shift', { method: 'POST' });
   setTimeout(loadStatus, 300);
 }
 
@@ -640,30 +1002,78 @@ async function loadConfig() {
 
     // Set checkboxes
     const types = c.worker.types || [];
-    document.getElementById('type_alignment').checked = types.includes('video-alignment');
     document.getElementById('type_transcode').checked = types.includes('transcode');
     document.getElementById('type_transcription').checked = types.includes('transcription');
     document.getElementById('type_claude').checked = types.includes('claude-processing');
+    document.getElementById('type_ffprobe').checked = types.includes('ffprobe');
 
+    var scheduleEnabled = c.schedule.enabled !== false;
+    document.getElementById('schedule_enabled').checked = scheduleEnabled;
     document.getElementById('shift_start').value = c.schedule.shift_start;
     document.getElementById('shift_end').value = c.schedule.shift_end;
+    updateScheduleUI(scheduleEnabled);
+
     document.getElementById('poll_interval').value = c.timing.poll_interval_secs;
     document.getElementById('heartbeat_interval').value = c.timing.heartbeat_interval_secs;
     document.getElementById('job_delay').value = c.timing.job_delay_secs;
     document.getElementById('whisper_path').value = c.tools.whisper_path;
     document.getElementById('whisper_model').value = c.tools.whisper_model;
+    document.getElementById('whisper_compute_type').value = c.tools.whisper_compute_type || 'float16';
     document.getElementById('claude_path').value = c.tools.claude_path;
     document.getElementById('ffmpeg_path').value = c.tools.ffmpeg_path;
+    document.getElementById('ffprobe_path').value = c.tools.ffprobe_path || '';
+    document.getElementById('output_directory').value = (c.paths && c.paths.output_directory) || '';
     document.getElementById('melt_path').value = c.tools.melt_path;
+    document.getElementById('melt_video_bitrate').value = c.tools.melt_video_bitrate || '5000k';
+    document.getElementById('melt_audio_bitrate').value = c.tools.melt_audio_bitrate || '192k';
+
+    // Load per-tool env vars
+    var toolEnv = (c.tools && c.tools.tool_env) || {};
+    document.getElementById('env_whisper').value = envMapToText(toolEnv.whisper || {});
   } catch(e) { console.error('Config fetch failed', e); }
+}
+
+function envMapToText(map) {
+  return Object.entries(map).map(function(e) { return e[0] + '=' + e[1]; }).join('\n');
+}
+
+function textToEnvMap(text) {
+  var map = {};
+  text.split('\n').forEach(function(line) {
+    var trimmed = line.trim();
+    if (!trimmed || trimmed.indexOf('=') < 0) return;
+    var idx = trimmed.indexOf('=');
+    var key = trimmed.substring(0, idx).trim();
+    var val = trimmed.substring(idx + 1).trim();
+    if (key) map[key] = val;
+  });
+  return map;
+}
+
+function updateScheduleUI(enabled) {
+  document.getElementById('shift_row').style.opacity = enabled ? '1' : '0.5';
+  document.getElementById('shift_start').disabled = !enabled;
+  document.getElementById('shift_end').disabled = !enabled;
+  document.getElementById('run_once_row').style.display = enabled ? 'none' : 'block';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  var cb = document.getElementById('schedule_enabled');
+  if (cb) cb.addEventListener('change', function() { updateScheduleUI(this.checked); });
+});
+
+async function runOnce() {
+  try {
+    await fetch('/api/scheduler/run-once', { method: 'POST' });
+  } catch(e) { console.error('Run once failed', e); }
 }
 
 function getSelectedTypes() {
   const types = [];
-  if (document.getElementById('type_alignment').checked) types.push('video-alignment');
   if (document.getElementById('type_transcode').checked) types.push('transcode');
   if (document.getElementById('type_transcription').checked) types.push('transcription');
   if (document.getElementById('type_claude').checked) types.push('claude-processing');
+  if (document.getElementById('type_ffprobe').checked) types.push('ffprobe');
   return types;
 }
 
@@ -674,6 +1084,7 @@ async function saveConfig() {
       server_url: document.getElementById('server_url').value,
       worker_id: document.getElementById('worker_id').value,
       types: getSelectedTypes(),
+      schedule_enabled: document.getElementById('schedule_enabled').checked,
       shift_start: document.getElementById('shift_start').value,
       shift_end: document.getElementById('shift_end').value,
       poll_interval_secs: parseInt(document.getElementById('poll_interval').value),
@@ -681,9 +1092,17 @@ async function saveConfig() {
       job_delay_secs: parseInt(document.getElementById('job_delay').value),
       whisper_path: document.getElementById('whisper_path').value,
       whisper_model: document.getElementById('whisper_model').value,
+      whisper_compute_type: document.getElementById('whisper_compute_type').value,
       claude_path: document.getElementById('claude_path').value,
       ffmpeg_path: document.getElementById('ffmpeg_path').value,
+      ffprobe_path: document.getElementById('ffprobe_path').value,
+      output_directory: document.getElementById('output_directory').value,
       melt_path: document.getElementById('melt_path').value,
+      melt_video_bitrate: document.getElementById('melt_video_bitrate').value,
+      melt_audio_bitrate: document.getElementById('melt_audio_bitrate').value,
+      tool_env: {
+        whisper: textToEnvMap(document.getElementById('env_whisper').value),
+      },
     };
     const r = await fetch('/api/config', {
       method: 'POST',

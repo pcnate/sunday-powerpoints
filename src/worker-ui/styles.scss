@@ -5,3 +5,13 @@ body {
   background: #1e1e2e;
   color: #cdd6f4;
 }
+
+// Dark theme overrides for MatDialog
+.mat-mdc-dialog-surface {
+  background: #313244 !important;
+  color: #cdd6f4 !important;
+}
+
+.cdk-overlay-dark-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}

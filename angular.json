@@ -145,7 +145,8 @@
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {
-            "port": 4201
+            "port": 4201,
+            "proxyConfig": "src/worker-ui/proxy.conf.json"
           },
           "configurations": {
             "production": {

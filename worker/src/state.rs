@@ -48,6 +48,10 @@ pub enum TrayCommand {
     OpenConfig,
     /// Reload configuration from disk.
     ReloadConfig,
+    /// Run exactly one job cycle then stop.
+    RunOnce,
+    /// Toggle force on-shift (bypass shift window).
+    ToggleForceOnShift,
 }
 
 
@@ -61,6 +65,7 @@ pub struct TrayState {
     pub jobs_completed: u32,
     pub jobs_failed: u32,
     pub uptime_secs: u64,
+    pub force_on_shift: bool,
 }
 
 
@@ -74,6 +79,7 @@ impl Default for TrayState {
             jobs_completed: 0,
             jobs_failed: 0,
             uptime_secs: 0,
+            force_on_shift: false,
         }
     }
 }
@@ -89,6 +95,7 @@ pub struct AppState {
     pub jobs_completed: RwLock<u32>,
     pub jobs_failed: RwLock<u32>,
     pub started_at: DateTime<Utc>,
+    pub force_on_shift: RwLock<bool>,
 }
 
 
@@ -104,6 +111,7 @@ impl AppState {
             jobs_completed: RwLock::new( 0 ),
             jobs_failed: RwLock::new( 0 ),
             started_at: Utc::now(),
+            force_on_shift: RwLock::new( false ),
         }
     }
 
@@ -118,6 +126,7 @@ impl AppState {
             jobs_completed: *self.jobs_completed.read().await,
             jobs_failed: *self.jobs_failed.read().await,
             uptime_secs: ( Utc::now() - self.started_at ).num_seconds() as u64,
+            force_on_shift: *self.force_on_shift.read().await,
         }
     }
 }

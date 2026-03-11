@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::api_client::{ ApiClient, Job, LogEntry };
@@ -14,7 +15,188 @@ pub struct JobOutput {
 }
 
 
+/// Resolve a job's relative input_path to an absolute path using the worker's
+/// configured output_directory. If the path is already absolute, returns it unchanged.
+fn resolve_input_path( config: &AppConfig, relative_path: &str ) -> String {
+    let normalized = relative_path.replace( '/', "\\" );
+
+    // Already absolute (e.g. starts with drive letter or UNC)
+    if normalized.len() >= 2 && normalized.as_bytes()[ 1 ] == b':'
+        || normalized.starts_with( "\\\\" )
+    {
+        return normalized;
+    }
+
+    // Use configured output_directory, falling back to %OneDriveConsumer%
+    let output_dir = {
+        let configured = config.paths.output_directory.trim_end_matches( [ '/', '\\' ] );
+        if configured.is_empty() {
+            std::env::var( "OneDriveConsumer" ).unwrap_or_default()
+        } else {
+            configured.to_string()
+        }
+    };
+
+    if output_dir.is_empty() {
+        tracing::warn!( "No output_directory configured and OneDriveConsumer env var not set" );
+        return normalized;
+    }
+
+    format!( "{}\\{}", output_dir, normalized )
+}
+
+
+/// Resolve a job's relative output_path to an absolute path.
+fn resolve_output_path( config: &AppConfig, relative_path: &str ) -> String {
+    resolve_input_path( config, relative_path )
+}
+
+
+/// Check whether a file has Windows OneDrive placeholder attributes.
+/// Returns true if the file is NOT ready (still a cloud placeholder).
+#[cfg( target_os = "windows" )]
+fn is_onedrive_placeholder( path: &str ) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x00400000;
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x00040000;
+
+    match std::fs::metadata( path ) {
+        Ok( meta ) => {
+            let attrs = meta.file_attributes();
+            ( attrs & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS ) != 0
+                || ( attrs & FILE_ATTRIBUTE_RECALL_ON_OPEN ) != 0
+        }
+        Err( _ ) => false,
+    }
+}
+
+
+/// Non-Windows stub — files are always "ready".
+#[cfg( not( target_os = "windows" ) )]
+fn is_onedrive_placeholder( _path: &str ) -> bool {
+    false
+}
+
+
+/// Trigger OneDrive to download a cloud-only placeholder by reading from it.
+///
+/// On Windows, files with FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS are recalled
+/// (downloaded) when their data is accessed. Simply opening a handle is not
+/// enough — we must perform an actual read to trigger hydration.
+#[cfg( target_os = "windows" )]
+fn trigger_onedrive_hydration( path: &str ) {
+    use std::io::Read;
+    match std::fs::File::open( path ) {
+        Ok( mut f ) => {
+            let mut buf = [ 0u8; 1 ];
+            match f.read_exact( &mut buf ) {
+                Ok( () ) => tracing::info!( "Triggered OneDrive hydration for {}", path ),
+                Err( e ) => tracing::warn!( "Read failed (hydration may still start): {}", e ),
+            }
+        }
+        Err( e ) => tracing::warn!( "Could not open file to trigger hydration: {}", e ),
+    }
+}
+
+
+/// Non-Windows stub — no-op.
+#[cfg( not( target_os = "windows" ) )]
+fn trigger_onedrive_hydration( _path: &str ) {}
+
+
+/// Wait until a file is fully synced from OneDrive.
+///
+/// If the file is an OneDrive placeholder (cloud-only), triggers hydration
+/// by opening it for read, then polls until the download completes.
+/// Checks for placeholder attributes and file size stability.
+/// Polls every 30 seconds, sending heartbeats to keep the job alive.
+/// Returns an error if the file doesn't exist.
+async fn wait_for_file_ready(
+    path: &str,
+    api: &ApiClient,
+    job_id: u32,
+    worker_id: &str,
+    shutdown: &CancellationToken,
+) -> Result<()> {
+    // Check file exists
+    if !std::path::Path::new( path ).exists() {
+        anyhow::bail!( "Input file does not exist: {}", path );
+    }
+
+    // If it's a placeholder, trigger hydration immediately
+    if is_onedrive_placeholder( path ) {
+        let _ = api.send_logs( job_id, vec![
+            LogEntry {
+                level: "info".to_string(),
+                message: format!( "File is cloud-only, triggering OneDrive download: {}", path ),
+            },
+        ] ).await;
+        trigger_onedrive_hydration( path );
+    }
+
+    let mut logged_waiting = false;
+
+    loop {
+        // Check OneDrive placeholder attributes
+        if !is_onedrive_placeholder( path ) {
+            // Check file size stability (read, wait 2s, read again)
+            let size1 = std::fs::metadata( path )
+                .map( |m| m.len() )
+                .unwrap_or( 0 );
+
+            tokio::select! {
+                _ = tokio::time::sleep( Duration::from_secs( 2 ) ) => {}
+                _ = shutdown.cancelled() => {
+                    anyhow::bail!( "Shutdown requested while waiting for file sync" );
+                }
+            }
+
+            let size2 = std::fs::metadata( path )
+                .map( |m| m.len() )
+                .unwrap_or( 0 );
+
+            if size1 == size2 && size1 > 0 {
+                // File is stable and ready
+                if logged_waiting {
+                    let _ = api.send_logs( job_id, vec![
+                        LogEntry {
+                            level: "info".to_string(),
+                            message: "File is now synced and ready".to_string(),
+                        },
+                    ] ).await;
+                }
+                return Ok(());
+            }
+        }
+
+        if !logged_waiting {
+            let _ = api.send_logs( job_id, vec![
+                LogEntry {
+                    level: "info".to_string(),
+                    message: format!( "Waiting for OneDrive sync: {}", path ),
+                },
+            ] ).await;
+            logged_waiting = true;
+        }
+
+        // Poll every 30 seconds, send heartbeat to keep job alive
+        tokio::select! {
+            _ = tokio::time::sleep( Duration::from_secs( 30 ) ) => {}
+            _ = shutdown.cancelled() => {
+                anyhow::bail!( "Shutdown requested while waiting for file sync" );
+            }
+        }
+
+        let _ = api.heartbeat( job_id, worker_id, None ).await;
+    }
+}
+
+
 /// Execute a job by dispatching to the appropriate runner.
+///
+/// Resolves relative paths to absolute, waits for OneDrive sync,
+/// then dispatches to the type-specific runner.
 ///
 /// @param job - the claimed job to execute
 /// @param config - current worker configuration
@@ -26,6 +208,13 @@ pub async fn execute(
     api: Arc<ApiClient>,
     shutdown: CancellationToken,
 ) -> Result<JobOutput> {
+    // Resolve relative paths to absolute using worker's output_directory
+    let mut resolved_job = job.clone();
+    resolved_job.input_path = resolve_input_path( config, &job.input_path );
+    if let Some( ref out ) = job.output_path {
+        resolved_job.output_path = Some( resolve_output_path( config, out ) );
+    }
+
     // Send a log entry indicating the job has started
     let _ = api.send_logs( job.id, vec![
         LogEntry {
@@ -37,11 +226,20 @@ pub async fn execute(
         },
     ] ).await;
 
+    // Wait for input file to be synced from OneDrive
+    wait_for_file_ready(
+        &resolved_job.input_path,
+        &api,
+        job.id,
+        &config.worker.id,
+        &shutdown,
+    ).await?;
+
     let result = match job.job_type.as_str() {
-        "video-alignment" => runners::alignment::run( job, config, &api, &shutdown ).await,
-        "transcode" => runners::transcode::run( job, config, &api, &shutdown ).await,
-        "transcription" => runners::transcription::run( job, config, &api, &shutdown ).await,
-        "claude-processing" => runners::claude::run( job, config, &api, &shutdown ).await,
+        "transcode" => runners::transcode::run( &resolved_job, config, &api, &shutdown ).await,
+        "transcription" => runners::transcription::run( &resolved_job, config, &api, &shutdown ).await,
+        "claude-processing" => runners::claude::run( &resolved_job, config, &api, &shutdown ).await,
+        "ffprobe" => runners::ffprobe::run( &resolved_job, config, &api, &shutdown ).await,
         other => {
             anyhow::bail!( "Unknown job type: {}", other );
         }

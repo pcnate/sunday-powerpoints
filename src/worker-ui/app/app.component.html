@@ -13,6 +13,16 @@
       <mat-icon>{{ status?.phase === 'Paused' ? 'play_arrow' : 'pause' }}</mat-icon>
       {{ status?.phase === 'Paused' ? 'Resume' : 'Pause' }}
     </button>
+    <button mat-stroked-button (click)="toggleForceOnShift()"
+            [color]="status?.force_on_shift ? 'warn' : undefined"
+            [matTooltip]="status?.force_on_shift ? 'Stop forcing on-shift' : 'Force worker on-shift (bypass schedule)'">
+      <mat-icon>{{ status?.force_on_shift ? 'stop' : 'flash_on' }}</mat-icon>
+      {{ status?.force_on_shift ? 'Stop Forcing' : 'Force On-Shift' }}
+    </button>
+    <button mat-stroked-button (click)="runOnce()" matTooltip="Run one job cycle now">
+      <mat-icon>play_circle</mat-icon>
+      Run Once
+    </button>
   </div>
 </div>
 
@@ -31,94 +41,474 @@
   </mat-card-content>
 </mat-card>
 
-<!-- Config Form -->
-<div class="config-section">
-  <h2>
-    <mat-icon>dns</mat-icon>
-    Server
-  </h2>
-  <mat-form-field appearance="outline" class="full-width">
-    <mat-label>Server URL</mat-label>
-    <input matInput [(ngModel)]="serverUrl" placeholder="http://192.168.1.100:8080">
-  </mat-form-field>
+<!-- Tabbed Config -->
+<mat-tab-group [(selectedIndex)]="selectedTabIndex" animationDuration="0ms">
 
-  <h2>
-    <mat-icon>memory</mat-icon>
-    Worker
-  </h2>
-  <mat-form-field appearance="outline" class="full-width">
-    <mat-label>Worker ID</mat-label>
-    <input matInput [(ngModel)]="workerId">
-  </mat-form-field>
+  <!-- Job Queue Tab -->
+  <mat-tab label="Job Queue">
+    <div class="tab-content">
+      <!-- Detail Panel -->
+      <div class="job-detail" *ngIf="selectedJob">
+        <div class="job-detail-header">
+          <h3>
+            Job #{{ selectedJob.id }} — {{ selectedJob.type }}
+            <span class="badge" [ngClass]="'badge-' + selectedJob.status">{{ selectedJob.status }}</span>
+          </h3>
+          <button mat-icon-button (click)="closeJobDetail()" matTooltip="Close">
+            <mat-icon>close</mat-icon>
+          </button>
+        </div>
+        <div class="job-detail-meta">
+          <div>
+            <span class="meta-label">Sunday Date</span>
+            <span>{{ selectedJob.sunday_date || '-' }}</span>
+          </div>
+          <div>
+            <span class="meta-label">Input Path</span>
+            <span class="path-text">{{ selectedJob.input_path || '-' }}</span>
+          </div>
+          <div *ngIf="selectedJob.output_path">
+            <span class="meta-label">Output Path</span>
+            <span class="path-text">{{ selectedJob.output_path }}</span>
+          </div>
+          <div>
+            <span class="meta-label">Worker</span>
+            <span>{{ selectedJob.worker_id || '-' }}</span>
+          </div>
+          <div>
+            <span class="meta-label">Retries</span>
+            <span>{{ selectedJob.retry_count }}/{{ selectedJob.max_retries }}</span>
+          </div>
+          <div *ngIf="selectedJob.created_at">
+            <span class="meta-label">Created</span>
+            <span>{{ selectedJob.created_at | date:'short' }}</span>
+          </div>
+          <div *ngIf="selectedJob.started_at">
+            <span class="meta-label">Started</span>
+            <span>{{ selectedJob.started_at | date:'short' }}</span>
+          </div>
+          <div *ngIf="selectedJob.completed_at">
+            <span class="meta-label">Completed</span>
+            <span>{{ selectedJob.completed_at | date:'short' }}</span>
+          </div>
+          <div *ngIf="selectedJob.error_message" class="error-row">
+            <span class="meta-label">Error</span>
+            <span class="error-text">{{ selectedJob.error_message }}</span>
+          </div>
+        </div>
+        <div class="job-logs">
+          <div *ngIf="jobLogs.length === 0" class="logs-empty">No log entries</div>
+          <div *ngFor="let log of jobLogs; let i = index" class="log-entry">
+            <span class="log-ts">{{ log.created_at | date:'HH:mm:ss' }}</span>
+            <span *ngIf="i === 0 && isCommandLine( log.message )" class="log-cmd">{{ log.message }}</span>
+            <span *ngIf="!(i === 0 && isCommandLine( log.message ))"
+                  [ngClass]="{ 'log-error': log.level === 'error', 'log-warn': log.level === 'warn' }">{{ log.message }}</span>
+          </div>
+        </div>
+      </div>
 
-  <div class="checkbox-row">
-    <label>Job Types:</label>
-    <mat-checkbox [(ngModel)]="typeAlignment">Video Alignment</mat-checkbox>
-    <mat-checkbox [(ngModel)]="typeTranscription">Transcription</mat-checkbox>
-    <mat-checkbox [(ngModel)]="typeClaude">Claude Processing</mat-checkbox>
-  </div>
+      <div *ngIf="loadingDetail && !selectedJob" class="loading-detail">
+        Loading job details...
+      </div>
 
-  <h2>
-    <mat-icon>schedule</mat-icon>
-    Schedule
-  </h2>
-  <div class="field-row">
-    <mat-form-field appearance="outline">
-      <mat-label>Shift Start</mat-label>
-      <input matInput [(ngModel)]="shiftStart" placeholder="02:00">
-    </mat-form-field>
-    <mat-form-field appearance="outline">
-      <mat-label>Shift End</mat-label>
-      <input matInput [(ngModel)]="shiftEnd" placeholder="06:00">
-    </mat-form-field>
-  </div>
+      <!-- Queue Controls -->
+      <div class="queue-controls">
+        <mat-form-field appearance="outline" class="queue-filter">
+          <mat-label>Status</mat-label>
+          <mat-select [(ngModel)]="queueFilter" (selectionChange)="loadQueue()">
+            <mat-option value="">All Jobs</mat-option>
+            <mat-option value="pending,processing">Active</mat-option>
+            <mat-option value="pending">Pending</mat-option>
+            <mat-option value="processing">Processing</mat-option>
+            <mat-option value="completed">Completed</mat-option>
+            <mat-option value="failed">Failed</mat-option>
+            <mat-option value="cancelled">Cancelled</mat-option>
+          </mat-select>
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="queue-filter">
+          <mat-label>Type</mat-label>
+          <mat-select [(ngModel)]="queueTypeFilter" (selectionChange)="loadQueue()">
+            <mat-option value="">All Types</mat-option>
+            <mat-option value="ffprobe">FFprobe</mat-option>
+            <mat-option value="transcode">Transcode</mat-option>
+            <mat-option value="transcription">Transcription</mat-option>
+            <mat-option value="claude-processing">Claude</mat-option>
+          </mat-select>
+        </mat-form-field>
+        <button mat-icon-button (click)="loadQueue()" matTooltip="Refresh">
+          <mat-icon>refresh</mat-icon>
+        </button>
+      </div>
 
-  <h2>
-    <mat-icon>timer</mat-icon>
-    Timing
-  </h2>
-  <div class="field-row">
-    <mat-form-field appearance="outline">
-      <mat-label>Poll Interval (s)</mat-label>
-      <input matInput type="number" [(ngModel)]="pollInterval">
-    </mat-form-field>
-    <mat-form-field appearance="outline">
-      <mat-label>Heartbeat (s)</mat-label>
-      <input matInput type="number" [(ngModel)]="heartbeatInterval">
-    </mat-form-field>
-    <mat-form-field appearance="outline">
-      <mat-label>Job Delay (s)</mat-label>
-      <input matInput type="number" [(ngModel)]="jobDelay">
-    </mat-form-field>
-  </div>
+      <!-- Queue Table -->
+      <table class="queue-table" *ngIf="jobs.length > 0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Worker</th>
+            <th>Retry</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <ng-container *ngFor="let job of jobs">
+            <tr (click)="showJobDetail( job.id )"
+                [class.selected]="selectedJob?.id === job.id">
+              <td>#{{ job.id }}</td>
+              <td>{{ job.type }}</td>
+              <td>{{ job.sunday_date }}</td>
+              <td><span class="badge" [ngClass]="'badge-' + job.status">{{ job.status }}</span></td>
+              <td>{{ job.worker_id || '-' }}</td>
+              <td>{{ job.retry_count }}/{{ job.max_retries }}</td>
+              <td>{{ job.created_at | date:'shortDate' }}</td>
+              <td>
+                <button *ngIf="job.status === 'pending' || job.status === 'processing'"
+                        mat-icon-button color="warn" (click)="$event.stopPropagation(); cancelJob( job.id )"
+                        matTooltip="Cancel job">
+                  <mat-icon>cancel</mat-icon>
+                </button>
+              </td>
+            </tr>
+            <tr *ngIf="job.error_message" class="error-row-table">
+              <td colspan="8" class="error-cell">{{ job.error_message | slice:0:200 }}</td>
+            </tr>
+          </ng-container>
+        </tbody>
+      </table>
 
-  <h2>
-    <mat-icon>build</mat-icon>
-    Tool Paths
-  </h2>
-  <div class="field-row">
-    <mat-form-field appearance="outline">
-      <mat-label>Whisper</mat-label>
-      <input matInput [(ngModel)]="whisperPath">
-    </mat-form-field>
-    <mat-form-field appearance="outline">
-      <mat-label>Model</mat-label>
-      <input matInput [(ngModel)]="whisperModel">
-    </mat-form-field>
-  </div>
-  <div class="field-row">
-    <mat-form-field appearance="outline">
-      <mat-label>Claude</mat-label>
-      <input matInput [(ngModel)]="claudePath">
-    </mat-form-field>
-    <mat-form-field appearance="outline">
-      <mat-label>FFmpeg</mat-label>
-      <input matInput [(ngModel)]="ffmpegPath">
-    </mat-form-field>
-  </div>
+      <div *ngIf="jobs.length === 0" class="empty-state">
+        No jobs found
+      </div>
 
-  <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
-    <mat-icon>save</mat-icon>
-    {{ saving ? 'Saving...' : 'Save Configuration' }}
-  </button>
-</div>
+      <div *ngIf="jobs.length > 0" class="queue-footer">
+        Showing {{ jobs.length }} of {{ queueTotal }} jobs
+      </div>
+    </div>
+  </mat-tab>
+
+  <!-- Settings Tab -->
+  <mat-tab label="Settings">
+    <div class="tab-content">
+      <h2>
+        <mat-icon>dns</mat-icon>
+        Server
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Server URL</mat-label>
+        <input matInput [(ngModel)]="serverUrl" placeholder="http://192.168.1.100:8080">
+      </mat-form-field>
+
+      <h2>
+        <mat-icon>memory</mat-icon>
+        Worker
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Worker ID</mat-label>
+        <input matInput [(ngModel)]="workerId">
+      </mat-form-field>
+
+      <h2>
+        <mat-icon>folder</mat-icon>
+        Paths
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Output Directory (OneDrive sync path)</mat-label>
+        <input matInput [(ngModel)]="outputDirectory" placeholder="%OneDriveConsumer%">
+        <button matSuffix mat-icon-button (click)="browseDirectory( 'outputDirectory', 'Select Output Directory' )"
+                matTooltip="Browse for directory">
+          <mat-icon>folder_open</mat-icon>
+        </button>
+      </mat-form-field>
+
+      <h2>
+        <mat-icon>schedule</mat-icon>
+        Schedule
+      </h2>
+      <div class="schedule-toggle">
+        <mat-slide-toggle [(ngModel)]="scheduleEnabled">
+          Automatic scheduling
+        </mat-slide-toggle>
+      </div>
+      <div class="field-row" [class.disabled-fields]="!scheduleEnabled">
+        <mat-form-field appearance="outline">
+          <mat-label>Shift Start</mat-label>
+          <input matInput [(ngModel)]="shiftStart" placeholder="02:00" [disabled]="!scheduleEnabled">
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Shift End</mat-label>
+          <input matInput [(ngModel)]="shiftEnd" placeholder="06:00" [disabled]="!scheduleEnabled">
+        </mat-form-field>
+      </div>
+      <div *ngIf="!scheduleEnabled" class="manual-run">
+        <button mat-raised-button color="accent" (click)="runOnce()">
+          <mat-icon>play_circle</mat-icon>
+          Run Next Job
+        </button>
+      </div>
+
+      <h2>
+        <mat-icon>timer</mat-icon>
+        Timing
+      </h2>
+      <div class="field-row">
+        <mat-form-field appearance="outline">
+          <mat-label>Poll Interval (s)</mat-label>
+          <input matInput type="number" [(ngModel)]="pollInterval">
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Heartbeat (s)</mat-label>
+          <input matInput type="number" [(ngModel)]="heartbeatInterval">
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Job Delay (s)</mat-label>
+          <input matInput type="number" [(ngModel)]="jobDelay">
+        </mat-form-field>
+      </div>
+
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        <mat-icon>save</mat-icon>
+        {{ saving ? 'Saving...' : 'Save Configuration' }}
+      </button>
+    </div>
+  </mat-tab>
+
+  <!-- FFprobe Tab -->
+  <mat-tab label="FFprobe">
+    <div class="tab-content">
+      <div class="tab-enable-toggle">
+        <mat-slide-toggle [(ngModel)]="typeFfprobe">
+          Enable FFprobe jobs
+        </mat-slide-toggle>
+      </div>
+      <h2>
+        <mat-icon>info</mat-icon>
+        FFprobe
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>FFprobe Path</mat-label>
+        <input matInput [(ngModel)]="ffprobePath">
+        <button matSuffix mat-icon-button (click)="browse( 'ffprobePath', 'Select FFprobe' )"
+                matTooltip="Browse for file">
+          <mat-icon>folder_open</mat-icon>
+        </button>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Environment Variables (KEY=VALUE per line)</mat-label>
+        <textarea matInput [(ngModel)]="envFfprobe" rows="2"
+                  placeholder="KEY=VALUE" style="font-family:monospace"></textarea>
+      </mat-form-field>
+
+      <div class="test-section">
+        <button mat-stroked-button (click)="testTool( 'ffprobe' )" [disabled]="testing['ffprobe']">
+          <mat-icon>{{ testing['ffprobe'] ? 'hourglass_empty' : 'play_arrow' }}</mat-icon>
+          {{ testing['ffprobe'] ? 'Testing...' : 'Test FFprobe' }}
+        </button>
+        <div *ngIf="testResults['ffprobe']" class="test-result"
+             [class.test-success]="testResults['ffprobe']!.success"
+             [class.test-failure]="!testResults['ffprobe']!.success">
+          <mat-icon>{{ testResults['ffprobe']!.success ? 'check_circle' : 'error' }}</mat-icon>
+          <pre>{{ testResults['ffprobe']!.output }}</pre>
+        </div>
+      </div>
+
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        <mat-icon>save</mat-icon>
+        {{ saving ? 'Saving...' : 'Save Configuration' }}
+      </button>
+    </div>
+  </mat-tab>
+
+  <!-- Transcode Tab -->
+  <mat-tab label="Transcode">
+    <div class="tab-content">
+      <div class="tab-enable-toggle">
+        <mat-slide-toggle [(ngModel)]="typeTranscode">
+          Enable Transcode jobs
+        </mat-slide-toggle>
+      </div>
+      <h2>
+        <mat-icon>movie</mat-icon>
+        Melt (Kdenlive)
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Melt Path</mat-label>
+        <input matInput [(ngModel)]="meltPath">
+        <button matSuffix mat-icon-button (click)="browse( 'meltPath', 'Select Melt' )"
+                matTooltip="Browse for file">
+          <mat-icon>folder_open</mat-icon>
+        </button>
+      </mat-form-field>
+      <div class="field-row">
+        <mat-form-field appearance="outline">
+          <mat-label>Video Bitrate</mat-label>
+          <input matInput [(ngModel)]="meltVideoBitrate" placeholder="5000k">
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>Audio Bitrate</mat-label>
+          <input matInput [(ngModel)]="meltAudioBitrate" placeholder="192k">
+        </mat-form-field>
+      </div>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>FFmpeg Path</mat-label>
+        <input matInput [(ngModel)]="ffmpegPath">
+        <button matSuffix mat-icon-button (click)="browse( 'ffmpegPath', 'Select FFmpeg' )"
+                matTooltip="Browse for file">
+          <mat-icon>folder_open</mat-icon>
+        </button>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Melt Environment Variables (KEY=VALUE per line)</mat-label>
+        <textarea matInput [(ngModel)]="envMelt" rows="2"
+                  placeholder="KEY=VALUE" style="font-family:monospace"></textarea>
+      </mat-form-field>
+
+      <div class="test-section test-row">
+        <div>
+          <button mat-stroked-button (click)="testTool( 'transcode' )" [disabled]="testing['transcode']">
+            <mat-icon>{{ testing['transcode'] ? 'hourglass_empty' : 'play_arrow' }}</mat-icon>
+            {{ testing['transcode'] ? 'Testing...' : 'Test Melt' }}
+          </button>
+          <div *ngIf="testResults['transcode']" class="test-result"
+               [class.test-success]="testResults['transcode']!.success"
+               [class.test-failure]="!testResults['transcode']!.success">
+            <mat-icon>{{ testResults['transcode']!.success ? 'check_circle' : 'error' }}</mat-icon>
+            <pre>{{ testResults['transcode']!.output }}</pre>
+          </div>
+        </div>
+        <div>
+          <button mat-stroked-button (click)="testTool( 'ffmpeg' )" [disabled]="testing['ffmpeg']">
+            <mat-icon>{{ testing['ffmpeg'] ? 'hourglass_empty' : 'play_arrow' }}</mat-icon>
+            {{ testing['ffmpeg'] ? 'Testing...' : 'Test FFmpeg' }}
+          </button>
+          <div *ngIf="testResults['ffmpeg']" class="test-result"
+               [class.test-success]="testResults['ffmpeg']!.success"
+               [class.test-failure]="!testResults['ffmpeg']!.success">
+            <mat-icon>{{ testResults['ffmpeg']!.success ? 'check_circle' : 'error' }}</mat-icon>
+            <pre>{{ testResults['ffmpeg']!.output }}</pre>
+          </div>
+        </div>
+      </div>
+
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        <mat-icon>save</mat-icon>
+        {{ saving ? 'Saving...' : 'Save Configuration' }}
+      </button>
+    </div>
+  </mat-tab>
+
+  <!-- Transcription Tab -->
+  <mat-tab label="Transcription">
+    <div class="tab-content">
+      <div class="tab-enable-toggle">
+        <mat-slide-toggle [(ngModel)]="typeTranscription">
+          Enable Transcription jobs
+        </mat-slide-toggle>
+      </div>
+      <h2>
+        <mat-icon>mic</mat-icon>
+        Whisper
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Whisper Path</mat-label>
+        <input matInput [(ngModel)]="whisperPath">
+        <button matSuffix mat-icon-button (click)="browse( 'whisperPath', 'Select Whisper' )"
+                matTooltip="Browse for file">
+          <mat-icon>folder_open</mat-icon>
+        </button>
+      </mat-form-field>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Model</mat-label>
+        <input matInput [(ngModel)]="whisperModel" placeholder="large-v3"
+               [matAutocomplete]="modelAuto">
+        <mat-autocomplete #modelAuto="matAutocomplete">
+          <mat-option *ngFor="let m of whisperModels" [value]="m">{{ m }}</mat-option>
+        </mat-autocomplete>
+      </mat-form-field>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Compute Type</mat-label>
+        <input matInput [(ngModel)]="whisperComputeType" placeholder="float16"
+               [matAutocomplete]="computeTypeAuto">
+        <mat-autocomplete #computeTypeAuto="matAutocomplete">
+          <mat-option *ngFor="let ct of whisperComputeTypes" [value]="ct">{{ ct }}</mat-option>
+        </mat-autocomplete>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Environment Variables (KEY=VALUE per line)</mat-label>
+        <textarea matInput [(ngModel)]="envWhisper" rows="2"
+                  placeholder="PYTHONIOENCODING=utf-8" style="font-family:monospace"></textarea>
+      </mat-form-field>
+
+      <div class="test-section">
+        <button mat-stroked-button (click)="testTool( 'transcription' )" [disabled]="testing['transcription']">
+          <mat-icon>{{ testing['transcription'] ? 'hourglass_empty' : 'play_arrow' }}</mat-icon>
+          {{ testing['transcription'] ? 'Testing...' : 'Test Whisper' }}
+        </button>
+        <div *ngIf="testResults['transcription']" class="test-result"
+             [class.test-success]="testResults['transcription']!.success"
+             [class.test-failure]="!testResults['transcription']!.success">
+          <mat-icon>{{ testResults['transcription']!.success ? 'check_circle' : 'error' }}</mat-icon>
+          <pre>{{ testResults['transcription']!.output }}</pre>
+        </div>
+      </div>
+
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        <mat-icon>save</mat-icon>
+        {{ saving ? 'Saving...' : 'Save Configuration' }}
+      </button>
+    </div>
+  </mat-tab>
+
+  <!-- Claude Processing Tab -->
+  <mat-tab label="Claude Processing">
+    <div class="tab-content">
+      <div class="tab-enable-toggle">
+        <mat-slide-toggle [(ngModel)]="typeClaude">
+          Enable Claude Processing jobs
+        </mat-slide-toggle>
+      </div>
+      <h2>
+        <mat-icon>psychology</mat-icon>
+        Claude
+      </h2>
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Claude Path</mat-label>
+        <input matInput [(ngModel)]="claudePath">
+        <button matSuffix mat-icon-button (click)="browse( 'claudePath', 'Select Claude' )"
+                matTooltip="Browse for file">
+          <mat-icon>folder_open</mat-icon>
+        </button>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Environment Variables (KEY=VALUE per line)</mat-label>
+        <textarea matInput [(ngModel)]="envClaude" rows="2"
+                  placeholder="KEY=VALUE" style="font-family:monospace"></textarea>
+      </mat-form-field>
+
+      <div class="test-section">
+        <button mat-stroked-button (click)="testTool( 'claude-processing' )" [disabled]="testing['claude-processing']">
+          <mat-icon>{{ testing['claude-processing'] ? 'hourglass_empty' : 'play_arrow' }}</mat-icon>
+          {{ testing['claude-processing'] ? 'Testing...' : 'Test Claude' }}
+        </button>
+        <div *ngIf="testResults['claude-processing']" class="test-result"
+             [class.test-success]="testResults['claude-processing']!.success"
+             [class.test-failure]="!testResults['claude-processing']!.success">
+          <mat-icon>{{ testResults['claude-processing']!.success ? 'check_circle' : 'error' }}</mat-icon>
+          <pre>{{ testResults['claude-processing']!.output }}</pre>
+        </div>
+      </div>
+
+      <button mat-raised-button color="primary" (click)="saveConfig()" [disabled]="saving">
+        <mat-icon>save</mat-icon>
+        {{ saving ? 'Saving...' : 'Save Configuration' }}
+      </button>
+    </div>
+  </mat-tab>
+</mat-tab-group>

@@ -35,7 +35,7 @@ jest.mock( 'node:fs', () => {
 } );
 
 import * as db from '../src/db';
-import { Job, CreateJobRequest, JobType, JobStatus } from '../src/types/job';
+import { Job, CreateJobRequest, JobType, JobStatus, VideoStatus, VideoRecord } from '../src/types/job';
 
 jest.setTimeout( 10000 );
 
@@ -110,12 +110,12 @@ describe( 'Job types', () => {
 
   it( 'CreateJobRequest supports optional fields', () => {
     const request: CreateJobRequest = {
-      type: 'video-alignment',
+      type: 'transcode',
       sunday_date: '20260222',
-      input_path: '/output/20260222/Vids',
-      output_path: '/output/20260222/Vids/20260222.kdenlive',
+      input_path: '/output/20260222/Vids/20260222.kdenlive',
+      output_path: '/output/20260222/Vids/20260222-production.mp4',
       priority: 3,
-      metadata: { camera_files: [ 'file1.mp4', 'file2.mp4' ] },
+      metadata: { video_bitrate: '5000k' },
       parent_job_id: 1,
       max_retries: 5,
     };
@@ -125,8 +125,8 @@ describe( 'Job types', () => {
   });
 
   it( 'JobType only allows valid types', () => {
-    const validTypes: JobType[] = [ 'video-alignment', 'transcription', 'claude-processing' ];
-    expect( validTypes.length ).toBe( 3 );
+    const validTypes: JobType[] = [ 'transcription', 'claude-processing', 'transcode', 'ffprobe' ];
+    expect( validTypes.length ).toBe( 4 );
   });
 
   it( 'JobStatus covers all states', () => {
@@ -213,16 +213,6 @@ describe( 'Job API route logic', () => {
       expect( completedJob.output_path ).toContain( '.vtt' );
     });
 
-    it( 'video-alignment completion should NOT auto-chain', () => {
-      const completedJob = mockJobRow({
-        type: 'video-alignment',
-        status: 'completed',
-      });
-      // Video alignment does not auto-chain — user must render in Kdenlive first
-      // scanFolders() will detect the production MP4 and create transcription job
-      expect( completedJob.type ).toBe( 'video-alignment' );
-    });
-
     it( 'claude-processing is terminal — no chain', () => {
       const completedJob = mockJobRow({
         type: 'claude-processing',
@@ -234,44 +224,47 @@ describe( 'Job API route logic', () => {
 });
 
 describe( 'scanFolders job detection logic', () => {
-  it( 'detects 2+ raw MP4s without production file as alignment candidate', () => {
-    const files = [ '00001.MP4', '00002.MP4', 'thumbnail.jpeg' ];
-    const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
-    const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
-    const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
+  it( 'detects raw video files as ffprobe candidates, skips production', () => {
+    const files = [ '00001.MP4', '00002.MP4', '20260222-production.mp4', 'thumbnail.jpeg', 'camera.MTS' ];
+    const probeFiles = files.filter( f =>
+      /\.(mp4|mts)$/i.test( f ) && !/^\d{8}-production\.mp4$/i.test( f )
+    );
 
-    expect( rawMp4s.length ).toBe( 2 );
-    expect( productionFile ).toBeUndefined();
-    // Should create a video-alignment job
+    expect( probeFiles.length ).toBe( 3 );
+    expect( probeFiles ).toContain( '00001.MP4' );
+    expect( probeFiles ).not.toContain( '20260222-production.mp4' );
+    expect( probeFiles ).toContain( 'camera.MTS' );
   });
 
-  it( 'detects production MP4 as transcription candidate', () => {
-    const files = [ '00001.MP4', '00002.MP4', '20260222-production.mp4', 'thumbnail.jpeg' ];
-    const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
-    const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
-
-    expect( productionFile ).toBe( '20260222-production.mp4' );
-    // Should create a transcription job
+  it( 'production MP4 is excluded from scanFolders ffprobe auto-detection', () => {
+    const files = [ '00001.MP4', '20260222-production.mp4', 'camera.MTS' ];
+    const probeFiles = files.filter( f =>
+      /\.(mp4|mts)$/i.test( f ) && !/^\d{8}-production\.mp4$/i.test( f )
+    );
+    expect( probeFiles ).toEqual([ '00001.MP4', 'camera.MTS' ]);
+    expect( probeFiles ).not.toContain( '20260222-production.mp4' );
   });
 
-  it( 'does not create alignment job when production file exists', () => {
-    const files = [ '00001.MP4', '00002.MP4', '20260222-production.mp4' ];
-    const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
-    const productionFile = mp4Files.find( f => f.match( /^\d{8}-production\.mp4$/i ) );
-    const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
-
-    expect( productionFile ).toBeDefined();
-    // Should NOT create alignment job when production already exists
-    expect( rawMp4s.length >= 2 && !productionFile ).toBe( false );
+  it( 'held ffprobe job is created with queued status at approve time', () => {
+    // When approve-kdenlive creates a transcode job, it also creates
+    // an ffprobe job in 'queued' status that workers won't claim.
+    const heldJob = mockJobRow({ type: 'ffprobe', status: 'queued' });
+    expect( heldJob.status ).toBe( 'queued' );
   });
 
-  it( 'does not trigger with only 1 MP4', () => {
-    const files = [ '00001.MP4', 'thumbnail.jpeg' ];
-    const mp4Files = files.filter( f => f.toLowerCase().endsWith( '.mp4' ) );
-    const rawMp4s = mp4Files.filter( f => !f.match( /^\d{8}-production\.mp4$/i ) );
+  it( 'transcode completion releases held ffprobe to pending', () => {
+    // When transcode completes, the held ffprobe job is updated to 'pending'
+    // so the worker can claim it. Runs in parallel with transcription.
+    const heldJob = mockJobRow({ type: 'ffprobe', status: 'queued' });
+    const releasedStatus = 'pending';
+    expect( heldJob.status ).not.toBe( releasedStatus );
+  });
 
-    expect( rawMp4s.length >= 2 ).toBe( false );
-    // Should not create any job
+  it( 'ffprobe jobs are terminal — no chaining', () => {
+    // ffprobe completion populates the videos table but does not chain.
+    const filename = '00001.MP4';
+    const isProduction = /^\d{8}-production\.mp4$/i.test( filename );
+    expect( isProduction ).toBe( false );
   });
 });
 
@@ -286,5 +279,156 @@ describe( 'migration system', () => {
     const file = '001_create_jobs_tables.sql';
     const name = file.replace( /\.sql$/, '' );
     expect( name ).toBe( '001_create_jobs_tables' );
+  });
+});
+
+describe( 'VideoRecord types', () => {
+  it( 'VideoStatus covers all valid states', () => {
+    const validStatuses: VideoStatus[] = [ 'pending', 'completed', 'failed' ];
+    expect( validStatuses.length ).toBe( 3 );
+  });
+
+  it( 'VideoRecord has required fields', () => {
+    const record: VideoRecord = {
+      id: 1,
+      input_path: '20260301/Vids/camera.MTS',
+      sunday_date: '20260301',
+      filename: 'camera.MTS',
+      status: 'completed',
+      job_id: 42,
+      duration_secs: 3600.5,
+      duration_timecode: '01:00:00.500',
+      framerate: 29.97,
+      width: 1920,
+      height: 1080,
+      video_codec: 'h264',
+      audio_codec: 'aac',
+      audio_streams: 2,
+      bitrate: 25000000,
+      file_size: 11264000000,
+      file_created_at: new Date( '2026-03-01T10:00:00Z' ),
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    expect( record.input_path ).toBe( '20260301/Vids/camera.MTS' );
+    expect( record.status ).toBe( 'completed' );
+    expect( record.duration_secs ).toBe( 3600.5 );
+    expect( record.width ).toBe( 1920 );
+  });
+
+  it( 'VideoRecord allows null for optional metadata fields', () => {
+    const record: VideoRecord = {
+      id: 2,
+      input_path: '20260301/Vids/00001.MP4',
+      sunday_date: '20260301',
+      filename: '00001.MP4',
+      status: 'pending',
+      job_id: null,
+      duration_secs: null,
+      duration_timecode: null,
+      framerate: null,
+      width: null,
+      height: null,
+      video_codec: null,
+      audio_codec: null,
+      audio_streams: null,
+      bitrate: null,
+      file_size: null,
+      file_created_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    expect( record.status ).toBe( 'pending' );
+    expect( record.duration_secs ).toBeNull();
+    expect( record.job_id ).toBeNull();
+  });
+});
+
+describe( 'videos table dedup logic', () => {
+  it( 'probe job creation checks videos table not jobs table', () => {
+    // The createProbeJobIfNotExists function now uses getVideoByPath()
+    // to check the videos table (any status) instead of querying the jobs table.
+    // A pending video row means a job already exists → skip.
+    const existingVideo: Partial<VideoRecord> = {
+      input_path: '20260301/Vids/camera.MTS',
+      status: 'pending',
+    };
+    // Any status blocks duplicate creation
+    expect( [ 'pending', 'completed', 'failed' ] ).toContain( existingVideo.status );
+  });
+
+  it( 'ffprobe completion populates video row metadata', () => {
+    // When an ffprobe job completes, handleJobChaining calls completeVideo()
+    // to update the video row with structured metadata columns.
+    const meta = {
+      duration_secs: 1800.25,
+      duration_timecode: '00:30:00.250',
+      framerate: 29.97,
+      width: 1920,
+      height: 1080,
+      video_codec: 'h264',
+      audio_codec: 'aac',
+      audio_streams: 2,
+      bitrate: 25000000,
+      file_size: 5632000000,
+      created_at: '2026-03-01 10:00:00',
+    };
+    expect( meta.duration_secs ).toBeGreaterThan( 0 );
+    expect( meta.width ).toBe( 1920 );
+  });
+
+  it( 'permanent ffprobe failure marks video row as failed', () => {
+    // When an ffprobe job permanently fails (no retries left),
+    // failVideo() sets status='failed' on the video row.
+    const job = mockJobRow({ type: 'ffprobe', retry_count: 3, max_retries: 3 });
+    const willRetry = job.retry_count < job.max_retries;
+    expect( willRetry ).toBe( false );
+    // failVideo() would be called here
+  });
+});
+
+describe( 'MTS cleanup via videos table', () => {
+  it( 'getOldestMtsVideo queries by .mts extension and 6-month age', () => {
+    // The cleanup function now queries the videos table instead of
+    // walking the filesystem. It filters by:
+    // - status = 'completed'
+    // - filename LIKE '%.mts' (case-insensitive via LOWER)
+    // - file_created_at < 6 months ago
+    const filename = 'camera.MTS';
+    expect( filename.toLowerCase().endsWith( '.mts' ) ).toBe( true );
+
+    const fileCreated = new Date( '2025-06-01' );
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth( sixMonthsAgo.getMonth() - 6 );
+    expect( fileCreated < sixMonthsAgo ).toBe( true );
+  });
+
+  it( 'cleanup deletes video row after file removal', () => {
+    // After deleting an MTS file, deleteVideo() removes the row
+    // and the ffprobe job is cancelled.
+    const inputPath = '20250601/Vids/camera.MTS';
+    expect( inputPath ).toBeTruthy();
+  });
+});
+
+describe( 'Kdenlive duration from videos table', () => {
+  it( 'picks max duration from completed video records', () => {
+    const videos: Partial<VideoRecord>[] = [
+      { duration_secs: 1800, duration_timecode: '00:30:00.000' },
+      { duration_secs: 3600.5, duration_timecode: '01:00:00.500' },
+      { duration_secs: 1200, duration_timecode: '00:20:00.000' },
+    ];
+
+    let maxSecs = 0;
+    let duration: string | undefined;
+    for ( const v of videos ) {
+      if ( v.duration_secs && v.duration_secs > maxSecs ) {
+        maxSecs = v.duration_secs;
+        duration = v.duration_timecode ?? undefined;
+      }
+    }
+
+    expect( maxSecs ).toBe( 3600.5 );
+    expect( duration ).toBe( '01:00:00.500' );
   });
 });

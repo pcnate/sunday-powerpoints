@@ -38,10 +38,15 @@ fn main() -> Result<()> {
     tracing::info!( "sunday-worker starting up" );
 
     // Load or create configuration
-    let config = config::load_config()?;
+    let mut config = config::load_config()?;
     let config_path = config::config_path()?;
 
     tracing::info!( "Config loaded from: {}", config_path.display() );
+
+    // Resolve bare tool names to full paths via system PATH
+    if let Err( e ) = config::resolve_tool_paths( &mut config ) {
+        tracing::warn!( "Failed to resolve tool paths: {}", e );
+    }
     tracing::info!( "Server URL: {}", config.server.url );
     tracing::info!( "Worker ID: {}", config.worker.id );
     tracing::info!( "Job types: {:?}", config.worker.types );

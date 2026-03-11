@@ -28,6 +28,7 @@ pub async fn run(
     tracing::info!( "Scheduler started" );
 
     let mut paused = false;
+    let mut run_once = false;
 
     loop {
         // Check for shutdown
@@ -70,6 +71,15 @@ pub async fn run(
                         }
                     }
                 }
+                TrayCommand::RunOnce => {
+                    tracing::info!( "Run-once requested" );
+                    run_once = true;
+                }
+                TrayCommand::ToggleForceOnShift => {
+                    let mut forced = state.force_on_shift.write().await;
+                    *forced = !*forced;
+                    tracing::info!( "Force on-shift: {}", *forced );
+                }
             }
         }
 
@@ -89,8 +99,9 @@ pub async fn run(
         // Read current config
         let config = state.config.read().await.clone();
 
-        // Check if we're within the shift window
-        if !is_within_shift( &config ) {
+        // Check if we're within the shift window (run_once and force_on_shift bypass shift check)
+        let forced = *state.force_on_shift.read().await;
+        if !run_once && !forced && ( !config.schedule.enabled || !is_within_shift( &config ) ) {
             set_phase( &state, SchedulerPhase::OffShift ).await;
             tokio::select! {
                 _ = tokio::time::sleep( std::time::Duration::from_secs( 30 ) ) => {}
@@ -206,6 +217,12 @@ pub async fn run(
                     _ = shutdown.cancelled() => { break; }
                 }
             }
+        }
+
+        // Clear run_once flag after one poll cycle
+        if run_once {
+            tracing::info!( "Run-once cycle complete" );
+            run_once = false;
         }
     }
 
