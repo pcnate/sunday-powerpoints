@@ -324,8 +324,8 @@ export async function runSundayPowerpoints( options: SundayPowerpointsOptions ) 
     const templateFilePath = path.join( templateDirectory, SUNDAY_TEMPLATE );
     const shortcutPathTodo = `${ path.join( templateDirectory, file ) } TODO.lnk`;
     const shortcutPathDone = `${ path.join( templateDirectory, file ) }.lnk`;
+    const notesPath = `${ path.join( _outputDirectory, file ) } Notes.txt`;
     const filePath = `${ path.join( _outputDirectory, file ) }.${ ext }`;
-    const notesPath = path.join( _outputDirectory, `${ file } Notes.txt` );
     const existsTodo = await checkIfFileExists( resolveToAbsolutePath( shortcutPathTodo ) );
     const existsDone = await checkIfFileExists( resolveToAbsolutePath( shortcutPathDone ) );
 

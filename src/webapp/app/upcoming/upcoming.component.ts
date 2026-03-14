@@ -1129,4 +1129,19 @@ export class UpcomingComponent implements OnInit, OnDestroy {
 
     return [ month, year ];
   }
+
+
+  /**
+   * Archive a folder, moving it from the output root into the YYYY/ subdirectory.
+   *
+   * @param week - the week whose folder should be archived
+   */
+  archiveFolder( week: { date: string; folder: FolderInfo | null } ): void {
+    if ( !week.date ) return;
+
+    this.http.post<{ ok: boolean }>( `/api/folders/${ week.date }/archive`, {} ).subscribe({
+      next: () => this.loadMonth(),
+      error: ( err ) => console.error( 'Failed to archive folder:', err ),
+    });
+  }
 }

@@ -4,6 +4,7 @@ mod heartbeat;
 mod job_runner;
 mod runners;
 mod scheduler;
+mod sse;
 mod state;
 mod tray;
 mod web_ui;
@@ -98,6 +99,11 @@ fn main() -> Result<()> {
 
             // Start the config web UI server (runs in background)
             tokio::spawn( web_ui::run( web_state, web_tray_tx, web_ui_port ) );
+
+            // Start the SSE client (persistent connection for online tracking)
+            let sse_state = Arc::clone( &rt_state );
+            let sse_shutdown = rt_shutdown.clone();
+            tokio::spawn( sse::run( sse_state, sse_shutdown ) );
 
             // Check initial connectivity
             let connected = rt_api.health_check().await;

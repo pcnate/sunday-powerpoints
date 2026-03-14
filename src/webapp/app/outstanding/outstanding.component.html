@@ -131,9 +131,9 @@
             subtitles
           </mat-icon>
           <mat-icon
-            [class.icon-ready]="folder.hasSermonMd"
-            [class.icon-missing]="!folder.hasSermonMd"
-            [matTooltip]="folder.hasSermonMd ? 'Sermon notes ready' : 'No sermon notes'">
+            [class.icon-ready]="folder.hasSummary"
+            [class.icon-missing]="!folder.hasSummary"
+            [matTooltip]="folder.hasSummary ? 'Summary ready' : 'No summary'">
             article
           </mat-icon>
           <mat-icon

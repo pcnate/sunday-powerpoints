@@ -131,6 +131,12 @@
                 <mat-icon>undo</mat-icon>
                 <span>Cancel approval</span>
               </button>
+              <button mat-menu-item
+                      *ngIf="week.folder && !week.folder.archived"
+                      (click)="archiveFolder( week )">
+                <mat-icon>archive</mat-icon>
+                <span>Archive</span>
+              </button>
             </mat-menu>
           </div>
         </mat-card-header>

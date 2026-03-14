@@ -94,11 +94,37 @@ paths:
                 items:
                   $ref: '#/components/schemas/SongFile'
 
+  /api/songs/{id}/history:
+    get:
+      tags: [Songs]
+      summary: Get song usage history by ID
+      description: Returns song details and all dates the song was used, with slot information. Preferred over the name-based lookup.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Song primary key
+      responses:
+        '200':
+          description: Song details with usage history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SongHistoryResponse'
+        '400':
+          description: Invalid song ID
+        '404':
+          description: Song not found
+        '503':
+          description: Database not available
+
   /api/songs/history:
     get:
       tags: [Songs]
-      summary: Get song usage history
-      description: Returns song details and all dates the song was used, with slot information.
+      summary: Get song usage history by name (legacy)
+      description: Returns song details and all dates the song was used, with slot information. Uses tiered fuzzy matching by name. Prefer /api/songs/{id}/history when the song ID is known.
       parameters:
         - name: name
           in: query
@@ -544,6 +570,72 @@ paths:
         '500':
           description: Backfill failed
 
+  # --- Settings ---
+  /api/settings/{key}:
+    get:
+      tags: [Admin]
+      summary: Get a setting value
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Setting key (e.g., "claude-prompt")
+      responses:
+        '200':
+          description: Setting value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  value:
+                    type: string
+                  updatedAt:
+                    type: string
+                    format: date-time
+        '404':
+          description: Setting not found
+        '503':
+          description: Database not available
+    put:
+      tags: [Admin]
+      summary: Update a setting value
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Setting key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+      responses:
+        '200':
+          description: Setting updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '400':
+          description: Invalid value
+        '503':
+          description: Database not available
+
   # --- Jobs ---
   /api/jobs:
     get:
@@ -819,6 +911,43 @@ paths:
                   count:
                     type: integer
 
+  /api/jobs/workers/events:
+    get:
+      tags: [Worker]
+      summary: SSE stream for persistent worker connections
+      description: |
+        Server-Sent Events endpoint that maintains a persistent connection
+        from a worker. Used to track worker online status (even when off-shift)
+        and push job creation events. The server sends keepalive pings every
+        30 seconds and broadcasts `job:created` events as they occur.
+      parameters:
+        - name: worker_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The worker's unique identifier
+        - name: types
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated list of job types this worker handles
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE events in standard format:
+                  - `connected` — sent on initial connection
+                  - `job:created` — new job added to queue
+                  - `:keepalive` — comment ping every 30s
+        '400':
+          description: Missing worker_id parameter
+
   # --- Presentation Approval ---
   /api/folders/{name}/approve:
     put:
@@ -887,6 +1016,40 @@ paths:
           description: No Kdenlive project found
         '409':
           description: Production MP4 already exists or transcode job already queued
+
+  /api/folders/{name}/archive:
+    post:
+      tags: [Folders]
+      summary: Archive a Sunday folder
+      description: >
+        Moves OUTPUT_DIRECTORY/YYYYMMDD to OUTPUT_DIRECTORY/YYYY/YYYYMMDD.
+        Returns 409 if the folder is already archived or does not exist at the root level.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+          description: Folder name in YYYYMMDD format
+      responses:
+        '200':
+          description: Folder archived successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '400':
+          description: Missing or invalid folder name
+        '404':
+          description: Folder not found at root level
+        '409':
+          description: Folder is already archived or does not exist
+        '500':
+          description: Failed to move folder
 
   # --- YouTube URL ---
   /api/youtube-url:

@@ -37,49 +37,10 @@ pub async fn run(
             break;
         }
 
-        // Drain tray commands
+        // Drain tray commands (non-blocking)
         while let Ok( cmd ) = tray_rx.try_recv() {
-            match cmd {
-                TrayCommand::TogglePause => {
-                    paused = !paused;
-                    if paused {
-                        tracing::info!( "Scheduler paused by user" );
-                        set_phase( &state, SchedulerPhase::Paused ).await;
-                    } else {
-                        tracing::info!( "Scheduler resumed by user" );
-                    }
-                }
-                TrayCommand::Quit => {
-                    tracing::info!( "Quit command received" );
-                    shutdown.cancel();
-                    break;
-                }
-                TrayCommand::OpenConfig => {
-                    let config = state.config.read().await;
-                    let url = format!( "http://localhost:{}", config.web_ui.port );
-                    tracing::info!( "Opening config UI: {}", url );
-                    let _ = open::that( &url );
-                }
-                TrayCommand::ReloadConfig => {
-                    match crate::config::load_config() {
-                        Ok( new_config ) => {
-                            *state.config.write().await = new_config;
-                            tracing::info!( "Configuration reloaded from disk" );
-                        }
-                        Err( e ) => {
-                            tracing::error!( "Failed to reload config: {}", e );
-                        }
-                    }
-                }
-                TrayCommand::RunOnce => {
-                    tracing::info!( "Run-once requested" );
-                    run_once = true;
-                }
-                TrayCommand::ToggleForceOnShift => {
-                    let mut forced = state.force_on_shift.write().await;
-                    *forced = !*forced;
-                    tracing::info!( "Force on-shift: {}", *forced );
-                }
+            if handle_command( cmd, &mut paused, &mut run_once, &state, &shutdown ).await {
+                break;
             }
         }
 
@@ -87,11 +48,14 @@ pub async fn run(
             break;
         }
 
-        // If paused, just sleep briefly and loop
+        // If paused, sleep until unpaused or shutdown
         if paused {
             tokio::select! {
                 _ = tokio::time::sleep( std::time::Duration::from_millis( 500 ) ) => {}
                 _ = shutdown.cancelled() => { break; }
+                Some( cmd ) = tray_rx.recv() => {
+                    if handle_command( cmd, &mut paused, &mut run_once, &state, &shutdown ).await { break; }
+                }
             }
             continue;
         }
@@ -106,6 +70,9 @@ pub async fn run(
             tokio::select! {
                 _ = tokio::time::sleep( std::time::Duration::from_secs( 30 ) ) => {}
                 _ = shutdown.cancelled() => { break; }
+                Some( cmd ) = tray_rx.recv() => {
+                    if handle_command( cmd, &mut paused, &mut run_once, &state, &shutdown ).await { break; }
+                }
             }
             continue;
         }
@@ -117,6 +84,10 @@ pub async fn run(
         tokio::select! {
             _ = tokio::time::sleep( std::time::Duration::from_secs( config.timing.poll_interval_secs ) ) => {}
             _ = shutdown.cancelled() => { break; }
+            Some( cmd ) = tray_rx.recv() => {
+                if handle_command( cmd, &mut paused, &mut run_once, &state, &shutdown ).await { break; }
+                continue;
+            }
         }
 
         if shutdown.is_cancelled() {
@@ -206,6 +177,9 @@ pub async fn run(
                 tokio::select! {
                     _ = tokio::time::sleep( std::time::Duration::from_secs( config.timing.job_delay_secs ) ) => {}
                     _ = shutdown.cancelled() => { break; }
+                    Some( cmd ) = tray_rx.recv() => {
+                        if handle_command( cmd, &mut paused, &mut run_once, &state, &shutdown ).await { break; }
+                    }
                 }
             }
             Err( e ) => {
@@ -215,6 +189,9 @@ pub async fn run(
                 tokio::select! {
                     _ = tokio::time::sleep( std::time::Duration::from_secs( 10 ) ) => {}
                     _ = shutdown.cancelled() => { break; }
+                    Some( cmd ) = tray_rx.recv() => {
+                        if handle_command( cmd, &mut paused, &mut run_once, &state, &shutdown ).await { break; }
+                    }
                 }
             }
         }
@@ -228,6 +205,68 @@ pub async fn run(
 
     set_phase( &state, SchedulerPhase::OffShift ).await;
     tracing::info!( "Scheduler stopped" );
+}
+
+
+/// Handle a single tray command.
+///
+/// Returns true if the scheduler should shut down.
+///
+/// @param cmd - the command to handle
+/// @param paused - mutable pause state
+/// @param run_once - mutable run-once flag
+/// @param state - shared application state
+/// @param shutdown - cancellation token
+async fn handle_command(
+    cmd: TrayCommand,
+    paused: &mut bool,
+    run_once: &mut bool,
+    state: &AppState,
+    shutdown: &CancellationToken,
+) -> bool {
+    match cmd {
+        TrayCommand::TogglePause => {
+            *paused = !*paused;
+            if *paused {
+                tracing::info!( "Scheduler paused by user" );
+                set_phase( state, SchedulerPhase::Paused ).await;
+            } else {
+                tracing::info!( "Scheduler resumed by user" );
+            }
+        }
+        TrayCommand::Quit => {
+            tracing::info!( "Quit command received" );
+            shutdown.cancel();
+            return true;
+        }
+        TrayCommand::OpenConfig => {
+            let config = state.config.read().await;
+            let url = format!( "http://localhost:{}", config.web_ui.port );
+            tracing::info!( "Opening config UI: {}", url );
+            let _ = open::that( &url );
+        }
+        TrayCommand::ReloadConfig => {
+            match crate::config::load_config() {
+                Ok( new_config ) => {
+                    *state.config.write().await = new_config;
+                    tracing::info!( "Configuration reloaded from disk" );
+                }
+                Err( e ) => {
+                    tracing::error!( "Failed to reload config: {}", e );
+                }
+            }
+        }
+        TrayCommand::RunOnce => {
+            tracing::info!( "Run-once requested" );
+            *run_once = true;
+        }
+        TrayCommand::ToggleForceOnShift => {
+            let mut forced = state.force_on_shift.write().await;
+            *forced = !*forced;
+            tracing::info!( "Force on-shift: {}", *forced );
+        }
+    }
+    false
 }
 
 

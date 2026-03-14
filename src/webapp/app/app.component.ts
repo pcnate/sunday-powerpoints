@@ -9,8 +9,6 @@ import { UpcomingComponent } from './upcoming/upcoming.component';
 import { LibraryComponent } from './library/library.component';
 import { OutstandingComponent } from './outstanding/outstanding.component';
 import { JobsComponent } from './jobs/jobs.component';
-
-
 /** Tab definition mapping index to route and display name. */
 const TABS = [
   { route: 'planning', label: 'Planning' },

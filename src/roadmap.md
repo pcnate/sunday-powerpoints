@@ -173,14 +173,14 @@ These steps only become relevant after the Sunday date has passed. The Outstandi
 | 2. Kdenlive project | `hasKdenlive` — `*.kdenlive` file in folder | Manual (user creates/edits) | — |
 | 3. Production export | `hasProduction` — `YYYYMMDD-production.mp4` in folder | Auto | `transcode` |
 | 4. Transcription | `hasTranscription` — `*.vtt` file in folder | Auto | `transcription` |
-| 5. Claude output | `hasSermonMd` — `YYYYMMDD-sermon.md` in folder | Auto | `claude-processing` |
+| 5. Claude output | `hasSummary` — `Summary.md` in folder | Auto | `claude-processing` |
 | 6. YouTube upload | `youtubeUrl` — URL stored in folder metadata JSON | Manual | — |
 | 7. Archive | Folder moved to `YYYY/` subdirectory | Manual or scheduled | — |
 
 **Job chaining:**
 - Kdenlive approved → creates `transcode` job → renders `YYYYMMDD-production.mp4`
 - Transcode completed → auto-creates `transcription` job → generates `.vtt`
-- Transcription completed → auto-creates `claude-processing` job → generates `YYYYMMDD-sermon.md`
+- Transcription completed → auto-creates `claude-processing` job → generates `Summary.md`
 
 **YouTube tracking:** The upload is manual (user uploads to YouTube, then pastes the URL). The URL is stored in MySQL (e.g., a `youtube_url` column on a folders/sundays table) as the source of truth, and optionally written to the folder's metadata JSON for filesystem-level access. The Outstanding tab checks for a non-empty `youtubeUrl` to mark this step complete. The URL can also be displayed as a clickable link in the UI.
 
@@ -207,7 +207,7 @@ interface SundayFolder {
   hasKdenlive: boolean;        // *.kdenlive exists
   hasProduction: boolean;      // YYYYMMDD-production.mp4 exists
   hasTranscription: boolean;   // *.vtt exists
-  hasSermonMd: boolean;        // YYYYMMDD-sermon.md exists
+  hasSummary: boolean;          // Summary.md exists
   youtubeUrl: string | null;   // YouTube video URL (null = not uploaded)
   isApproved: boolean;         // .lnk filename does not contain "TODO"
   hasVerse: boolean;           // Memory verse present in template

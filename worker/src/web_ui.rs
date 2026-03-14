@@ -820,6 +820,10 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
     <input id="worker_id" type="text">
   </div>
   <div class="form-group">
+    <label for="output_directory">Output Directory (sermons root folder)</label>
+    <input id="output_directory" type="text" placeholder="%OneDriveConsumer%">
+  </div>
+  <div class="form-group">
     <label>Job Types</label>
     <div class="checkbox-group">
       <label><input type="checkbox" id="type_ffprobe" value="ffprobe"> FFprobe</label>
@@ -917,12 +921,6 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
       <label for="melt_audio_bitrate">Audio Bitrate</label>
       <input id="melt_audio_bitrate" type="text" placeholder="192k">
     </div>
-  </div>
-
-  <h2>Paths</h2>
-  <div class="form-group">
-    <label for="output_directory">Output Directory (OneDrive sync path)</label>
-    <input id="output_directory" type="text" placeholder="%OneDriveConsumer%">
   </div>
 
   <button onclick="saveConfig()">Save Configuration</button>

@@ -30,6 +30,29 @@ const workers = new Map<string, {
 }>();
 
 
+/** Active SSE connections keyed by worker_id. */
+const sseClients = new Map<string, { res: Response; keepalive: ReturnType<typeof setInterval> }>();
+
+
+/**
+ * Broadcast an SSE event to all connected workers.
+ *
+ * @param event - the event name
+ * @param data - the event data (will be JSON-stringified)
+ */
+export function broadcastSse( event: string, data: unknown ): void {
+  const payload = `event: ${ event }\ndata: ${ JSON.stringify( data ) }\n\n`;
+  for ( const [ id, client ] of sseClients ) {
+    try {
+      client.res.write( payload );
+    } catch {
+      clearInterval( client.keepalive );
+      sseClients.delete( id );
+    }
+  }
+}
+
+
 /**
  * Record that a worker was seen (claim or heartbeat).
  *
@@ -102,11 +125,12 @@ export function getWorkers(): WorkerInfo[] {
 
   for ( const [ id, w ] of workers ) {
     const msSinceSeen = now - w.last_seen.getTime();
+    const sseConnected = sseClients.has( id );
     let status: WorkerInfo[ 'status' ] = 'idle';
-    if ( msSinceSeen > WORKER_STALE_MS ) {
-      status = 'stale';
-    } else if ( w.current_job_id !== null ) {
+    if ( w.current_job_id !== null ) {
       status = 'executing';
+    } else if ( !sseConnected && msSinceSeen > WORKER_STALE_MS ) {
+      status = 'stale';
     }
 
     result.push({
@@ -186,6 +210,7 @@ export function createJobRoutes( io: SocketIOServer ): Router {
       const job = parseJobRow( rows[ 0 ] );
 
       io.emit( 'job:created', job );
+      broadcastSse( 'job:created', job );
       console.log( `[JOBS] Created job #${ job.id } (${ job.type }) for ${ job.sunday_date }` );
 
       res.status( 201 ).json( job );
@@ -256,6 +281,61 @@ export function createJobRoutes( io: SocketIOServer ): Router {
   router.get( '/workers', ( _req: Request, res: Response ) => {
     res.json({ workers: getWorkers() });
   } );
+
+
+  // GET /api/jobs/workers/events - SSE stream for persistent worker connections
+  router.get( '/workers/events', ( req: Request, res: Response ) => {
+    const workerId = req.query.worker_id as string;
+    const types = ( req.query.types as string || '' ).split( ',' ).filter( Boolean );
+
+    if ( !workerId ) {
+      res.status( 400 ).json({ error: 'worker_id query parameter is required' });
+      return;
+    }
+
+    // Close existing SSE connection for this worker (reconnect scenario)
+    const existing = sseClients.get( workerId );
+    if ( existing ) {
+      clearInterval( existing.keepalive );
+      existing.res.end();
+      sseClients.delete( workerId );
+    }
+
+    // Set SSE headers
+    res.writeHead( 200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    } );
+
+    // Send initial connected event
+    res.write( `event: connected\ndata: ${ JSON.stringify({ worker_id: workerId }) }\n\n` );
+
+    // Register/refresh worker in tracker
+    touchWorker( workerId, types.length > 0 ? types : undefined );
+
+    // Keepalive ping every 30 seconds (also refreshes worker last_seen)
+    const keepalive = setInterval( () => {
+      try {
+        res.write( ':keepalive\n\n' );
+        touchWorker( workerId );
+      } catch {
+        clearInterval( keepalive );
+        sseClients.delete( workerId );
+      }
+    }, 30_000 );
+
+    sseClients.set( workerId, { res, keepalive } );
+    console.log( `[SSE] Worker '${ workerId }' connected (types: ${ types.join( ', ' ) || 'none' })` );
+
+    // Cleanup on disconnect
+    req.on( 'close', () => {
+      clearInterval( keepalive );
+      sseClients.delete( workerId );
+      console.log( `[SSE] Worker '${ workerId }' disconnected` );
+    } );
+  } );
+
 
   // GET /api/jobs/:id - Get job details with recent logs
   router.get( '/:id', async ( req: Request, res: Response ) => {
@@ -642,6 +722,7 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
       const [ transcodeRows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ transcodeResult.insertId ] );
       const chainedJob = parseJobRow( transcodeRows[ 0 ] );
       io.emit( 'job:created', chainedJob );
+      broadcastSse( 'job:created', chainedJob );
       console.log( `[JOBS] Chained transcription job #${ chainedJob.id } from transcode job #${ job.id }` );
 
       // Release held ffprobe job for the production file (created at approve time)
@@ -669,9 +750,8 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
         return;
       }
 
-      // Determine output path for notes
-      const outputDirectory = process.env.OUTPUT_DIRECTORY || '/output';
-      const notesPath = require( 'path' ).join( outputDirectory, job.sunday_date, `${ job.sunday_date } Notes.txt` );
+      // Determine output path for summary (matches hasSummary detection: Summary.txt)
+      const notesPath = `${ job.sunday_date }/Summary.txt`;
 
       const [ existing ] = await pool.query<RowDataPacket[]>(
         `SELECT id FROM jobs WHERE type = 'claude-processing' AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
@@ -683,6 +763,17 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
         return;
       }
 
+      // Fetch the editable prompt from settings
+      let prompt = '';
+      try {
+        const [ promptRows ] = await pool.query<RowDataPacket[]>(
+          "SELECT `value` FROM settings WHERE `key` = 'claude-prompt'"
+        );
+        if ( promptRows.length > 0 ) prompt = promptRows[ 0 ].value;
+      } catch {
+        // Settings table may not exist yet — use empty prompt (worker will use fallback)
+      }
+
       const [ result ] = await pool.query<ResultSetHeader>(
         `INSERT INTO jobs (type, status, priority, sunday_date, input_path, output_path, metadata, parent_job_id)
          VALUES ('claude-processing', 'pending', ?, ?, ?, ?, ?, ?)`,
@@ -691,7 +782,7 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
           job.sunday_date,
           vttPath,
           notesPath,
-          JSON.stringify({ prompt_template: 'sermon-notes' }),
+          JSON.stringify({ prompt_template: 'summary', prompt }),
           job.id,
         ]
       );
@@ -699,6 +790,7 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
       const [ newRows ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ result.insertId ] );
       const newJob = parseJobRow( newRows[ 0 ] );
       io.emit( 'job:created', newJob );
+      broadcastSse( 'job:created', newJob );
       console.log( `[JOBS] Chained claude-processing job #${ newJob.id } from transcription job #${ job.id }` );
       break;
     }

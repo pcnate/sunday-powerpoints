@@ -15,8 +15,11 @@ pub struct JobOutput {
 }
 
 
-/// Resolve a job's relative input_path to an absolute path using the worker's
-/// configured output_directory. If the path is already absolute, returns it unchanged.
+/// Resolve a job's relative input_path to an absolute path.
+///
+/// Job paths are stored relative to `%OneDriveConsumer%` (the OneDrive root),
+/// so any machine with OneDrive can resolve them without extra configuration.
+/// Falls back to `output_directory` config if the env var is not set.
 fn resolve_input_path( config: &AppConfig, relative_path: &str ) -> String {
     let normalized = relative_path.replace( '/', "\\" );
 
@@ -27,22 +30,19 @@ fn resolve_input_path( config: &AppConfig, relative_path: &str ) -> String {
         return normalized;
     }
 
-    // Use configured output_directory, falling back to %OneDriveConsumer%
-    let output_dir = {
-        let configured = config.paths.output_directory.trim_end_matches( [ '/', '\\' ] );
-        if configured.is_empty() {
-            std::env::var( "OneDriveConsumer" ).unwrap_or_default()
-        } else {
+    // Resolve OneDrive root: prefer env var, fall back to configured output_directory
+    let onedrive_root = std::env::var( "OneDriveConsumer" )
+        .unwrap_or_else( |_| {
+            let configured = config.paths.output_directory.trim_end_matches( [ '/', '\\' ] );
             configured.to_string()
-        }
-    };
+        });
 
-    if output_dir.is_empty() {
-        tracing::warn!( "No output_directory configured and OneDriveConsumer env var not set" );
+    if onedrive_root.is_empty() {
+        tracing::warn!( "OneDriveConsumer env var not set and no output_directory configured" );
         return normalized;
     }
 
-    format!( "{}\\{}", output_dir, normalized )
+    format!( "{}\\{}", onedrive_root.trim_end_matches( [ '/', '\\' ] ), normalized )
 }
 
 

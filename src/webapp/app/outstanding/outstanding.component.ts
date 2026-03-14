@@ -34,7 +34,7 @@ interface RawFolder {
   hasKdenlive: boolean;
   hasProduction: boolean;
   hasTranscription: boolean;
-  hasSermonMd: boolean;
+  hasSummary: boolean;
   youtubeUrl: string | null;
   backlog: boolean;
   archived: boolean;
@@ -139,7 +139,7 @@ export class OutstandingComponent implements OnInit, OnDestroy {
    * Enrich raw folder data with stage-aware pipeline completion fields.
    *
    * Stage 1 (pre-service): songs (3) + presentation + approval — always relevant.
-   * Stage 2 (post-service): video → kdenlive → production → transcription → sermon.md → youtube.
+   * Stage 2 (post-service): video → kdenlive → production → transcription → summary → youtube.
    * Only counted after the Sunday has passed AND Stage 1 is complete.
    *
    * @param raw - array of raw folder objects from the API
@@ -167,13 +167,15 @@ export class OutstandingComponent implements OnInit, OnDestroy {
       ];
 
       // Stage 2: post-service pipeline (only for past dates with complete Stage 1)
+      // If YouTube URL is set, the video pipeline is considered complete
+      const ytDone = !!f.youtubeUrl;
       const stage2 = [
-        { key: 'Video', has: f.hasVideo },
-        { key: 'Kdenlive', has: f.hasKdenlive },
-        { key: 'Production', has: f.hasProduction },
-        { key: 'Transcription', has: f.hasTranscription },
-        { key: 'Sermon Notes', has: f.hasSermonMd },
-        { key: 'YouTube', has: !!f.youtubeUrl },
+        { key: 'Video', has: f.hasVideo || ytDone },
+        { key: 'Kdenlive', has: f.hasKdenlive || ytDone },
+        { key: 'Production', has: f.hasProduction || ytDone },
+        { key: 'Transcription', has: f.hasTranscription || ytDone },
+        { key: 'Summary', has: f.hasSummary || ytDone },
+        { key: 'YouTube', has: ytDone },
       ];
 
       const stage1Complete = stage1.every( ( c ) => c.has );
@@ -319,4 +321,6 @@ export class OutstandingComponent implements OnInit, OnDestroy {
   openYoutube( url: string ): void {
     window.open( url, '_blank' );
   }
+
+
 }

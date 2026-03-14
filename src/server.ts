@@ -700,10 +700,11 @@ if ( !config.templateFile ) {
 
 /**
  * Convert an absolute path to a relative job path by stripping the OneDrive root prefix.
- * Uses ROOT_PATH / %OneDriveConsumer% so paths are portable across machines.
+ * Paths are stored relative to %OneDriveConsumer% so workers on any machine
+ * can resolve them using their own OneDrive environment variable.
  *
  * @param absolutePath - full filesystem path
- * @returns path relative to the OneDrive root
+ * @returns path relative to OneDrive root (e.g. "PowerPoints/Sermon Videos/Sermons/20250420/Vids/file.mp4")
  */
 function toJobPath( absolutePath: string ): string {
   const onedriveRoot = resolveToAbsolutePath( config.rootPath || '%OneDriveConsumer%' )
@@ -888,7 +889,7 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
   const hasThumbnail = !!thumbnail;
 
   let hasSong1 = false, hasSong2 = false, hasSong3 = false;
-  let hasSermonMd = false;
+  let hasSummary = false;
   const songSlots: string[] = [];
   files.forEach( f => {
     const lower = f.toLowerCase();
@@ -901,7 +902,7 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
       if ( songMatch[ 1 ] === '3' ) hasSong3 = true;
     }
     if ( lower.endsWith( '.kdenlive' ) ) hasKdenlive = true;
-    if ( /^\d{8}-sermon\.md$/i.test( f ) ) hasSermonMd = true;
+    if ( /^summary\.txt$/i.test( f ) ) hasSummary = true;
   });
 
   const notesFile = hasNotesFile( folderName, files );
@@ -927,7 +928,7 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     hasKdenlive,
     hasProduction,
     hasTranscription,
-    hasSermonMd,
+    hasSummary,
     youtubeUrl: null as string | null,
     sermonPptxFile: null as string | null,
     sermonTitle: null as string | null,
@@ -1050,8 +1051,8 @@ app.get( '/api/folders', async ( request: Request, response: Response ) => {
  * @returns the notes filename if found, or null
  */
 function hasNotesFile( folderName: string, files: string[] ): string | null {
-  // Match notes file: YYYYMMDD-notes.txt, YYYY-MM-DD-notes.txt, YYYYMMDD Notes.txt, Notes.txt (case-insensitive)
-  const notesRegex = /^(\d{4}-?\d{2}-?\d{2}[\s-]?)?notes\.txt$/i;
+  // Match notes file: {date} Notes.txt (case-insensitive)
+  const notesRegex = / Notes\.txt$/i;
   return files.find( f => notesRegex.test( f ) ) || null;
 }
 
@@ -1316,6 +1317,53 @@ app.get( '/api/youtube-url', async ( req: Request, res: Response ) => {
     res.json({ url: rows.length > 0 ? rows[ 0 ].url : null });
   } catch {
     res.json({ url: null });
+  }
+});
+
+
+/**
+ * API endpoint to archive a Sunday folder.
+ *
+ * Moves OUTPUT_DIRECTORY/YYYYMMDD or OUTPUT_DIRECTORY/YYYY Backlog/YYYYMMDD
+ * into OUTPUT_DIRECTORY/YYYY/YYYYMMDD.
+ * Returns 409 if the folder is already archived or not found.
+ */
+app.post( '/api/folders/:name/archive', async ( req: Request, res: Response ) => {
+  const folder = req.params.name;
+  if ( !folder || !/^\d{8}$/.test( folder ) ) {
+    res.status( 400 ).json({ error: 'Missing or invalid folder (YYYYMMDD required)' });
+    return;
+  }
+
+  const year = folder.slice( 0, 4 );
+  const candidates = [
+    path.join( config.outputDirectory, folder ),
+    path.join( config.outputDirectory, `${ year } Backlog`, folder ),
+  ];
+  const archiveDir = path.join( config.outputDirectory, year, folder );
+
+  let sourceDir: string | null = null;
+  for ( const candidate of candidates ) {
+    try {
+      const stat = await fs.promises.stat( candidate );
+      if ( stat.isDirectory() ) { sourceDir = candidate; break; }
+    } catch {}
+  }
+
+  if ( !sourceDir ) {
+    res.status( 409 ).json({ error: 'Folder is already archived or does not exist' });
+    return;
+  }
+
+  try {
+    await fs.promises.mkdir( path.join( config.outputDirectory, year ), { recursive: true } );
+    await fs.promises.rename( sourceDir, archiveDir );
+    console.log( `[ARCHIVE] Moved ${ folder } to ${ year }/` );
+    io.emit( 'folder-changes', { name: folder } );
+    res.json({ ok: true });
+  } catch ( err ) {
+    console.error( '[ARCHIVE] Failed to move folder:', err );
+    res.status( 500 ).json({ error: 'Failed to archive folder' });
   }
 });
 
@@ -1980,6 +2028,7 @@ app.get( '/api/songs', async ( req: Request, res: Response ) => {
         stat = await fs.promises.stat( fullPath );
       } catch { continue; }
       if ( stat.isDirectory() ) {
+        if ( f.toLowerCase() === 'archive' || f.toLowerCase() === 'icons' ) continue;
         await walk( fullPath, relPath );
       } else if ( f.toLowerCase().endsWith( ext ) ) {
         // Extract song number if filename starts with exactly 3 digits, optionally followed by space or dash
@@ -2457,6 +2506,54 @@ app.post( '/api/songs/create', async ( req: Request, res: Response ) => {
 
 
 /**
+ * Get a setting value by key.
+ *
+ * @param key - setting key (e.g., "claude-prompt")
+ */
+app.get( '/api/settings/:key', async ( req: Request, res: Response ) => {
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      'SELECT `value`, updated_at FROM settings WHERE `key` = ?',
+      [ req.params.key ]
+    );
+    if ( rows.length === 0 ) {
+      res.status( 404 ).json({ error: 'Setting not found' });
+      return;
+    }
+    res.json({ key: req.params.key, value: rows[ 0 ].value, updatedAt: rows[ 0 ].updated_at });
+  } catch {
+    res.status( 503 ).json({ error: 'Database not available' });
+  }
+});
+
+
+/**
+ * Update a setting value by key.
+ *
+ * @param key - setting key
+ * @body value - new value (string)
+ */
+app.put( '/api/settings/:key', async ( req: Request, res: Response ) => {
+  const { value } = req.body;
+  if ( typeof value !== 'string' ) {
+    res.status( 400 ).json({ error: 'value must be a string' });
+    return;
+  }
+  try {
+    const pool = getPool();
+    await pool.query(
+      'INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+      [ req.params.key, value ]
+    );
+    res.json({ ok: true });
+  } catch {
+    res.status( 503 ).json({ error: 'Database not available' });
+  }
+});
+
+
+/**
  * Backfill song selections from existing Sunday folder shortcuts into the database.
  * Iterates the folder cache and calls syncSelectionsFromFolder for each folder.
  * Idempotent — skips slots that already have active selections.
@@ -2754,6 +2851,26 @@ async function cleanupOldestMts() {
 
 
 /**
+ * Purge completed, cancelled, and failed jobs older than 90 days.
+ * Job logs are cascade-deleted via FK. Parent references are set to NULL.
+ */
+async function purgeOldJobs() {
+  try {
+    if ( !await healthCheck() ) return;
+    const pool = getPool();
+    const [ result ] = await pool.query<ResultSetHeader>(
+      `DELETE FROM jobs WHERE status IN ('completed', 'cancelled', 'failed') AND created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`
+    );
+    if ( result.affectedRows > 0 ) {
+      console.log( `[PURGE] Deleted ${ result.affectedRows } old jobs (>90 days)` );
+    }
+  } catch ( err ) {
+    console.error( '[PURGE] Failed to purge old jobs:', err );
+  }
+}
+
+
+/**
  * Returns song/chorus selections for each week in a given month
  */
 app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
@@ -2892,15 +3009,15 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
         const names = Array.from( nameSet );
         const placeholders = names.map( () => '?' ).join( ', ' );
         const [ rows ] = await pool.query<RowDataPacket[]>(
-          `SELECT id, normalized_name, ccli FROM songs WHERE normalized_name IN (${ placeholders })`,
+          `SELECT id, normalized_name, ccli, book FROM songs WHERE normalized_name IN (${ placeholders })`,
           names
         );
-        const songDbMap = new Map<string, { id: number; ccli?: string }>();
+        const songDbMap = new Map<string, { id: number; ccli?: string; book?: string }>();
         for ( const row of rows ) {
-          songDbMap.set( row.normalized_name, { id: row.id, ccli: row.ccli || undefined } );
+          songDbMap.set( row.normalized_name, { id: row.id, ccli: row.ccli || undefined, book: row.book || undefined } );
         }
 
-        // Attach id and ccli to each song/chorus
+        // Attach id, ccli, and book to each song/chorus
         for ( const week of Object.values( result ) ) {
           for ( const song of Object.values( week.songs ) ) {
             if ( song?.name ) {
@@ -2908,6 +3025,7 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
               if ( dbInfo ) {
                 song.id = dbInfo.id;
                 if ( dbInfo.ccli ) song.ccli = dbInfo.ccli;
+                if ( dbInfo.book ) song.book = dbInfo.book;
               }
             }
           }
@@ -2917,6 +3035,7 @@ app.get( '/api/week-song-selections', async ( req: Request, res: Response ) => {
               if ( dbInfo ) {
                 chorus.id = dbInfo.id;
                 if ( dbInfo.ccli ) chorus.ccli = dbInfo.ccli;
+                if ( dbInfo.book ) chorus.book = dbInfo.book;
               }
             }
           }
@@ -3414,6 +3533,8 @@ setupExpressEndpoints();
   schedule.scheduleJob( '*/2 * * * *', () => recoverStaleJobs( io ) );
   // Cleanup oldest MTS file (>6 months) once per hour
   schedule.scheduleJob( '0 * * * *', cleanupOldestMts );
+  // Purge completed/cancelled/failed jobs older than 90 days, daily at 3am
+  schedule.scheduleJob( '0 3 * * *', purgeOldJobs );
 
   const PORT = process?.env?.PORT || 8080;
   server.listen( PORT, () => {

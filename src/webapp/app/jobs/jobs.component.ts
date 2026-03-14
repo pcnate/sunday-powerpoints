@@ -12,8 +12,10 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatCardModule } from '@angular/material/card';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { Subject, takeUntil, interval, merge, debounceTime } from 'rxjs';
 import { SocketService } from '../../socket.service';
+import { AdminComponent } from '../admin/admin.component';
 
 
 /**
@@ -73,6 +75,7 @@ interface WorkerInfo {
     MatTooltipModule,
     MatProgressSpinnerModule,
     MatCardModule,
+    MatDialogModule,
   ],
   templateUrl: './jobs.component.html',
   styleUrls: [ './jobs.component.scss' ]
@@ -94,7 +97,8 @@ export class JobsComponent implements OnInit, OnDestroy {
 
   constructor(
     private http: HttpClient,
-    private socketService: SocketService
+    private socketService: SocketService,
+    private dialog: MatDialog
   ) {}
 
 
@@ -244,5 +248,15 @@ export class JobsComponent implements OnInit, OnDestroy {
     if ( diffMins < 60 ) return `${ diffMins }m ago`;
     if ( diffMins < 1440 ) return `${ Math.floor( diffMins / 60 ) }h ago`;
     return d.toLocaleDateString();
+  }
+
+
+  /**
+   * Open the job settings dialog.
+   */
+  openSettings(): void {
+    this.dialog.open( AdminComponent, {
+      width: '650px',
+    });
   }
 }
