@@ -209,11 +209,13 @@ export class OutstandingComponent implements OnInit, OnDestroy {
 
       // Stage 2: post-service pipeline (only for past dates with complete Stage 1)
       // If YouTube URL is set, the video pipeline is considered complete
+      // If transcription exists, Kdenlive and Production were skipped (raw video workflow)
       const ytDone = !!f.youtubeUrl;
+      const skippedEditing = f.hasTranscription && !f.hasKdenlive && !f.hasProduction;
       const stage2 = [
         { key: 'Video', has: f.hasVideo || ytDone },
-        { key: 'Kdenlive', has: f.hasKdenlive || ytDone },
-        { key: 'Production', has: f.hasProduction || ytDone },
+        { key: 'Kdenlive', has: f.hasKdenlive || ytDone || skippedEditing },
+        { key: 'Production', has: f.hasProduction || ytDone || skippedEditing },
         { key: 'Transcription', has: f.hasTranscription || ytDone },
         { key: 'Summary', has: f.hasSummary || ytDone },
         { key: 'YouTube', has: ytDone },
