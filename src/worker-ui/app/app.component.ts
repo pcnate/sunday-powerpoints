@@ -16,28 +16,9 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatSelectModule } from '@angular/material/select';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
-import { Subject, takeUntil, interval } from 'rxjs';
+import { Subject, takeUntil } from 'rxjs';
 import { FileBrowserDialogComponent, FileBrowserDialogData } from './file-browser-dialog.component';
-
-
-/**
- * Worker status from GET /api/status.
- */
-interface WorkerStatus {
-  phase: string;
-  connected: boolean;
-  current_job_id: number | null;
-  current_job_type: string | null;
-  jobs_completed: number;
-  jobs_failed: number;
-  uptime_secs: number;
-  worker_id: string;
-  server_url: string;
-  schedule_enabled: boolean;
-  shift_start: string;
-  shift_end: string;
-  force_on_shift: boolean;
-}
+import { WorkerWsService, WorkerStatus } from './worker-ws.service';
 
 
 /**
@@ -110,7 +91,7 @@ interface TestResult {
 
 /**
  * Root component for the worker config UI.
- * Displays real-time status and a tabbed configuration form.
+ * Displays real-time status via WebSocket and a tabbed configuration form.
  */
 @Component({
   selector: 'app-root',
@@ -192,8 +173,8 @@ export class AppComponent implements OnInit, OnDestroy {
   // Job Queue tab
   jobs: QueueJob[] = [];
   queueTotal = 0;
-  queueFilter = 'pending,processing';
-  queueTypeFilter = '';
+  queueStatusFilters: string[] = [ 'pending', 'processing' ];
+  queueTypeFilters: string[] = [];
   selectedJob: QueueJob | null = null;
   jobLogs: JobLog[] = [];
   loadingDetail = false;
@@ -209,29 +190,44 @@ export class AppComponent implements OnInit, OnDestroy {
     private http: HttpClient,
     private snackBar: MatSnackBar,
     private dialog: MatDialog,
+    private ws: WorkerWsService,
   ) {}
 
 
   /**
-   * Initialize status polling and load config.
+   * Subscribe to WebSocket events and load initial data.
    */
   ngOnInit(): void {
-    this.loadStatus();
-    this.loadConfig();
-    this.loadQueue();
+    // Status updates via WebSocket
+    this.ws.status$
+      .pipe( takeUntil( this.destroy$ ) )
+      .subscribe( ( s ) => {
+        this.status = s;
+      } );
 
-    interval( 3000 ).pipe( takeUntil( this.destroy$ ) )
-      .subscribe( () => this.loadStatus() );
+    this.ws.wsConnected$
+      .pipe( takeUntil( this.destroy$ ) )
+      .subscribe( ( c ) => {
+        this.connected = c;
+      } );
 
-    interval( 10000 ).pipe( takeUntil( this.destroy$ ) )
+    // Reload queue when worker completes/fails a job
+    this.ws.queueStale$
+      .pipe( takeUntil( this.destroy$ ) )
       .subscribe( () => {
-        if ( this.selectedTabIndex === 0 ) {
-          this.loadQueue();
-          if ( this.selectedJob ) {
-            this.refreshJobDetail( this.selectedJob.id );
-          }
+        this.loadQueue();
+        if ( this.selectedJob ) {
+          this.refreshJobDetail( this.selectedJob.id );
         }
       } );
+
+    // Reload config form when config changes externally
+    this.ws.configReloaded$
+      .pipe( takeUntil( this.destroy$ ) )
+      .subscribe( () => this.loadConfig() );
+
+    this.loadConfig();
+    this.loadQueue();
   }
 
 
@@ -241,21 +237,6 @@ export class AppComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
-  }
-
-
-  /**
-   * Fetch worker status from the local Rust worker API.
-   */
-  loadStatus(): void {
-    this.http.get<WorkerStatus>( '/api/status' )
-      .subscribe({
-        next: ( s ) => {
-          this.status = s;
-          this.connected = true;
-        },
-        error: () => { this.connected = false; },
-      });
   }
 
 
@@ -360,11 +341,9 @@ export class AppComponent implements OnInit, OnDestroy {
    * Toggle the scheduler's paused state.
    */
   togglePause(): void {
-    this.http.post( '/api/scheduler/pause', {} )
-      .subscribe({
-        next: () => setTimeout( () => this.loadStatus(), 300 ),
-        error: () => this.snackBar.open( 'Failed to toggle pause', 'Dismiss', { duration: 3000 } ),
-      });
+    this.http.post( '/api/scheduler/pause', {} ).subscribe({
+      error: () => this.snackBar.open( 'Failed to toggle pause', 'Dismiss', { duration: 3000 } ),
+    });
   }
 
 
@@ -372,11 +351,32 @@ export class AppComponent implements OnInit, OnDestroy {
    * Toggle force on-shift override.
    */
   toggleForceOnShift(): void {
-    this.http.post( '/api/scheduler/force-on-shift', {} )
-      .subscribe({
-        next: () => setTimeout( () => this.loadStatus(), 300 ),
-        error: () => this.snackBar.open( 'Failed to toggle force on-shift', 'Dismiss', { duration: 3000 } ),
-      });
+    this.http.post( '/api/scheduler/force-on-shift', {} ).subscribe({
+      error: () => this.snackBar.open( 'Failed to toggle force on-shift', 'Dismiss', { duration: 3000 } ),
+    });
+  }
+
+
+  /**
+   * Toggle pause for a specific job type (runtime only, not persisted).
+   *
+   * @param jobType - the job type string to pause/unpause
+   */
+  togglePauseType( jobType: string ): void {
+    this.http.post( `/api/scheduler/pause-type/${ jobType }`, {} ).subscribe({
+      error: () => this.snackBar.open( `Failed to toggle pause for ${ jobType }`, 'Dismiss', { duration: 3000 } ),
+    });
+  }
+
+
+  /**
+   * Check if a job type is currently paused.
+   *
+   * @param jobType - the job type to check
+   * @returns true if the type is paused
+   */
+  isTypePaused( jobType: string ): boolean {
+    return this.status?.paused_types?.includes( jobType ) ?? false;
   }
 
 
@@ -507,6 +507,22 @@ export class AppComponent implements OnInit, OnDestroy {
 
 
   /**
+   * Request the worker to claim and execute a specific job.
+   *
+   * @param jobId - the job ID to run
+   */
+  runJob( jobId: number ): void {
+    this.http.post( `/api/scheduler/run-job/${ jobId }`, {} )
+      .subscribe({
+        next: () => {
+          this.snackBar.open( `Job #${ jobId } dispatched to worker`, '', { duration: 3000 } );
+        },
+        error: () => this.snackBar.open( `Failed to run job #${ jobId }`, 'Dismiss', { duration: 3000 } ),
+      });
+  }
+
+
+  /**
    * Request the scheduler to run exactly one job cycle.
    */
   runOnce(): void {
@@ -514,7 +530,6 @@ export class AppComponent implements OnInit, OnDestroy {
       .subscribe({
         next: () => {
           this.snackBar.open( 'Run-once requested', '', { duration: 3000 } );
-          setTimeout( () => this.loadStatus(), 1000 );
         },
         error: () => this.snackBar.open( 'Run-once failed', 'Dismiss', { duration: 3000 } ),
       });
@@ -581,8 +596,8 @@ export class AppComponent implements OnInit, OnDestroy {
    */
   loadQueue(): void {
     let url = '/api/queue?limit=50';
-    if ( this.queueFilter ) url += `&status=${ this.queueFilter }`;
-    if ( this.queueTypeFilter ) url += `&type=${ this.queueTypeFilter }`;
+    if ( this.queueStatusFilters.length > 0 ) url += `&status=${ this.queueStatusFilters.join( ',' ) }`;
+    if ( this.queueTypeFilters.length > 0 ) url += `&type=${ this.queueTypeFilters.join( ',' ) }`;
 
     this.http.get<{ jobs: QueueJob[]; total: number }>( url )
       .subscribe({

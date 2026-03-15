@@ -156,7 +156,7 @@ function chain(
   <property name="length">2147483647</property>
   <property name="eof">pause</property>
   <property name="resource">${ resource }</property>
-  <property name="mlt_service">avformat-novalidate</property>
+  <property name="mlt_service">avformat</property>
   <property name="seekable">1</property>
   <property name="audio_index">${ audioIndex }</property>
   <property name="video_index">0</property>
@@ -458,7 +458,7 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   <property name="length">2147483647</property>
   <property name="eof">pause</property>
   <property name="resource">${ cameraFile }</property>
-  <property name="mlt_service">avformat-novalidate</property>
+  <property name="mlt_service">avformat</property>
   <property name="seekable">1</property>
   <property name="audio_index">1</property>
   <property name="video_index">0</property>
@@ -474,7 +474,7 @@ export function generateKdenlive( options: KdenliveOptions ): string {
   <property name="length">2147483647</property>
   <property name="eof">pause</property>
   <property name="resource">${ obsFile }</property>
-  <property name="mlt_service">avformat-novalidate</property>
+  <property name="mlt_service">avformat</property>
   <property name="seekable">1</property>
   <property name="audio_index">1</property>
   <property name="video_index">0</property>

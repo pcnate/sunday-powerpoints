@@ -490,6 +490,60 @@ export function createJobRoutes( io: SocketIOServer ): Router {
     }
   } );
 
+  // POST /api/jobs/:id/claim - Worker claims a specific job by ID (atomic)
+  router.post( '/:id/claim', async ( req: Request, res: Response ) => {
+    try {
+      const { worker_id } = req.body;
+      if ( !worker_id ) {
+        res.status( 400 ).json({ error: 'worker_id is required' });
+        return;
+      }
+
+      const pool = getPool();
+      const connection = await pool.getConnection();
+
+      try {
+        await connection.beginTransaction();
+
+        const [ rows ] = await connection.query<RowDataPacket[]>(
+          `SELECT * FROM jobs WHERE id = ? AND status = 'pending' FOR UPDATE`,
+          [ req.params.id ]
+        );
+
+        if ( rows.length === 0 ) {
+          await connection.commit();
+          res.status( 409 ).json({ error: 'Job is not pending or does not exist' });
+          return;
+        }
+
+        await connection.query(
+          `UPDATE jobs SET status = 'processing', worker_id = ?, started_at = NOW(), heartbeat_at = NOW() WHERE id = ?`,
+          [ worker_id, req.params.id ]
+        );
+
+        await connection.commit();
+
+        const [ updated ] = await pool.query<RowDataPacket[]>( 'SELECT * FROM jobs WHERE id = ?', [ req.params.id ] );
+        const job = parseJobRow( updated[ 0 ] );
+
+        touchWorker( worker_id, [ job.type ], job.id, job.type );
+        io.emit( 'job:updated', job );
+        console.log( `[JOBS] Worker '${ worker_id }' claimed specific job #${ job.id } (${ job.type })` );
+
+        res.json({ job });
+      } catch ( err ) {
+        await connection.rollback();
+        throw err;
+      } finally {
+        connection.release();
+      }
+    } catch ( err ) {
+      console.error( '[JOBS] Error claiming specific job:', err );
+      res.status( 500 ).json({ error: 'Failed to claim job' });
+    }
+  } );
+
+
   // POST /api/jobs/:id/heartbeat - Worker sends heartbeat
   router.post( '/:id/heartbeat', async ( req: Request, res: Response ) => {
     try {
@@ -750,8 +804,13 @@ async function handleJobChaining( job: Job, io: SocketIOServer ): Promise<void> 
         return;
       }
 
-      // Determine output path for summary (matches hasSummary detection: Summary.txt)
-      const notesPath = `${ job.sunday_date }/Summary.txt`;
+      // Determine output path for summary — derive folder from VTT path
+      // VTT is like "Some/Path/YYYYMMDD/Vids/file.vtt", Summary.txt lives at "Some/Path/YYYYMMDD/Summary.txt"
+      const vttDir = ( vttPath as string ).replace( /\\/g, '/' );
+      const vidsIdx = vttDir.lastIndexOf( '/Vids/' );
+      const notesPath = vidsIdx >= 0
+        ? vttDir.substring( 0, vidsIdx ) + '/Summary.txt'
+        : `${ job.sunday_date }/Summary.txt`;
 
       const [ existing ] = await pool.query<RowDataPacket[]>(
         `SELECT id FROM jobs WHERE type = 'claude-processing' AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,

@@ -45,6 +45,11 @@
       color: #6c757d;
       border-style: dashed;
     }
+
+    &.no-ccli {
+      color: #dc3545;
+      border-color: #dc3545;
+    }
   }
 
   .header-spacer {

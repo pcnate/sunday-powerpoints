@@ -165,6 +165,43 @@ impl ApiClient {
     }
 
 
+    /// Claim a specific job by ID.
+    ///
+    /// Returns `Ok(Some(job))` if claimed, `Ok(None)` if the job is not
+    /// pending (e.g., already claimed or completed), or an error on failure.
+    ///
+    /// @param job_id - the specific job to claim
+    /// @param worker_id - this worker's identifier
+    pub async fn claim_specific_job(
+        &self,
+        job_id: u32,
+        worker_id: &str,
+    ) -> Result<Option<Job>> {
+        let url = format!( "{}/api/jobs/{}/claim", self.base_url, job_id );
+        let body = serde_json::json!({ "worker_id": worker_id });
+
+        let response = self.client
+            .post( &url )
+            .json( &body )
+            .send()
+            .await
+            .context( "Failed to send claim request" )?;
+
+        match response.status().as_u16() {
+            200 => {
+                let claim: ClaimJobResponse = response.json().await
+                    .context( "Failed to parse claim response" )?;
+                Ok( Some( claim.job ) )
+            }
+            409 => Ok( None ),
+            status => {
+                let text = response.text().await.unwrap_or_default();
+                anyhow::bail!( "Claim request failed with status {}: {}", status, text );
+            }
+        }
+    }
+
+
     /// Send a heartbeat for a running job.
     ///
     /// Returns `true` if the worker should continue, `false` if the

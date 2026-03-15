@@ -203,14 +203,14 @@ export async function removeAllChorusSelections( sundayDate: string ): Promise<v
  *
  * @param year - the year
  * @param month - the month (1-12)
- * @returns song name and number, or null if none set
+ * @returns song fields including ccli, or null if none set
  */
-export async function getClosingSong( year: number, month: number ): Promise<{ name: string; number: string | null } | null> {
+export async function getClosingSong( year: number, month: number ): Promise<{ id: number; name: string; number: string | null; book: string | null; ccli: string | null } | null> {
   const pool = getPool();
   const monthKey = `${ year }${ String( month ).padStart( 2, '0' ) }`;
 
   const [ rows ] = await pool.query<RowDataPacket[]>(
-    `SELECT s.name, s.number
+    `SELECT s.id, s.name, s.number, s.book, s.ccli
      FROM song_selections sel
      JOIN songs s ON s.id = sel.song_id
      WHERE sel.sunday_date = ? AND sel.slot_type = 'closing' AND sel.removed_at IS NULL
@@ -220,7 +220,7 @@ export async function getClosingSong( year: number, month: number ): Promise<{ n
   );
 
   if ( rows.length === 0 ) return null;
-  return { name: rows[ 0 ].name, number: rows[ 0 ].number || null };
+  return { id: rows[ 0 ].id, name: rows[ 0 ].name, number: rows[ 0 ].number || null, book: rows[ 0 ].book || null, ccli: rows[ 0 ].ccli || null };
 }
 
 

@@ -1,16 +1,18 @@
 use axum::{
     extract::{ Path, Query, State as AxumState },
+    extract::ws::{ WebSocket, WebSocketUpgrade, Message },
     http::StatusCode,
-    response::{ Html, IntoResponse, Json },
+    response::{ IntoResponse, Json },
     routing::{ get, post, put },
     Router,
 };
 use serde::{ Deserialize, Serialize };
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{ broadcast, mpsc };
 use tower_http::cors::CorsLayer;
 
+use crate::broadcast::WorkerEvent;
 use crate::config;
 use crate::state::{ AppState, TrayCommand };
 
@@ -39,6 +41,8 @@ struct StatusResponse {
     shift_start: String,
     shift_end: String,
     force_on_shift: bool,
+    paused_types: Vec<String>,
+    active_types: Vec<String>,
 }
 
 
@@ -147,7 +151,6 @@ pub async fn run(
     let shared = Arc::new( WebState { app_state, tray_tx, http_client } );
 
     let app = Router::new()
-        .route( "/", get( index_handler ) )
         .route( "/api/status", get( status_handler ) )
         .route( "/api/config", get( get_config_handler ) )
         .route( "/api/config", post( update_config_handler ) )
@@ -159,6 +162,10 @@ pub async fn run(
         .route( "/api/scheduler/force-on-shift", post( force_on_shift_handler ) )
         .route( "/api/browse", post( browse_handler ) )
         .route( "/api/test-tool", post( test_tool_handler ) )
+        .route( "/api/scheduler/pause-type/{type_name}", post( pause_type_handler ) )
+        .route( "/api/scheduler/run-job/{job_id}", post( run_job_handler ) )
+        .route( "/ws", get( ws_handler ) )
+        .fallback( fallback_handler )
         .layer( CorsLayer::permissive() )
         .with_state( shared );
 
@@ -170,12 +177,6 @@ pub async fn run(
 
     axum::serve( listener, app ).await
         .expect( "Web UI server error" );
-}
-
-
-/// GET / — Serve the embedded HTML config page.
-async fn index_handler() -> Html<&'static str> {
-    Html( INDEX_HTML )
 }
 
 
@@ -200,6 +201,8 @@ async fn status_handler(
         shift_start: config.schedule.shift_start.clone(),
         shift_end: config.schedule.shift_end.clone(),
         force_on_shift: snapshot.force_on_shift,
+        paused_types: snapshot.paused_types,
+        active_types: snapshot.active_types,
     } )
 }
 
@@ -616,602 +619,178 @@ async fn test_tool_handler(
 }
 
 
-/// Embedded HTML for the config web UI.
+/// POST /api/scheduler/pause-type/:type_name — Toggle pause for a job type.
+async fn pause_type_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+    Path( type_name ): Path<String>,
+) -> impl IntoResponse {
+    let _ = state.tray_tx.try_send( TrayCommand::TogglePauseJobType( type_name ) );
+    Json( serde_json::json!({ "success": true }) )
+}
+
+
+/// POST /api/scheduler/run-job/:job_id — Claim and execute a specific job.
+async fn run_job_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+    Path( job_id ): Path<u32>,
+) -> impl IntoResponse {
+    let _ = state.tray_tx.try_send( TrayCommand::RunJob( job_id ) );
+    Json( serde_json::json!({ "success": true }) )
+}
+
+
+/// GET /ws — WebSocket upgrade for real-time push events.
+async fn ws_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade( move |socket| handle_ws( socket, state ) )
+}
+
+
+/// Handle a WebSocket connection: send snapshot, then stream events.
+async fn handle_ws( mut socket: WebSocket, state: Arc<WebState> ) {
+    // Send initial status snapshot
+    let snapshot = state.app_state.status_snapshot().await;
+    let event = WorkerEvent::StatusSnapshot( snapshot );
+    if let Ok( json ) = serde_json::to_string( &event )
+        && socket.send( Message::Text( json.into() ) ).await.is_err()
+    {
+        return;
+    }
+
+    // Subscribe to broadcast channel
+    let mut rx = state.app_state.event_tx.subscribe();
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok( event ) => {
+                        if let Ok( json ) = serde_json::to_string( &event )
+                            && socket.send( Message::Text( json.into() ) ).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err( broadcast::error::RecvError::Lagged( n ) ) => {
+                        tracing::warn!( "WebSocket client lagged by {} events, sending snapshot", n );
+                        let snapshot = state.app_state.status_snapshot().await;
+                        let event = WorkerEvent::StatusSnapshot( snapshot );
+                        if let Ok( json ) = serde_json::to_string( &event )
+                            && socket.send( Message::Text( json.into() ) ).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err( broadcast::error::RecvError::Closed ) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some( Ok( _ ) ) => {} // Ignore client messages
+                    _ => break, // Client disconnected
+                }
+            }
+        }
+    }
+}
+
+
+// ─── Static asset serving (release) / dev proxy (debug) ───────────────────────
+
+/// Embedded Angular build assets for release builds.
 ///
-/// A self-contained single page with inline CSS and JavaScript.
-/// No external dependencies or build step needed.
-const INDEX_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sunday Worker</title>
-<style>
-  :root {
-    --bg: #1e1e2e; --surface: #313244; --text: #cdd6f4;
-    --subtext: #a6adc8; --accent: #89b4fa; --green: #a6e3a1;
-    --yellow: #f9e2af; --red: #f38ba8; --border: #45475a;
-    --surface2: #585b70;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: var(--bg); color: var(--text);
-    max-width: 800px; margin: 0 auto; padding: 24px;
-  }
-  h1 { font-size: 1.5rem; margin-bottom: 8px; }
-  h2 { font-size: 1.1rem; margin: 24px 0 12px; color: var(--accent); }
-  .tabs {
-    display: flex; gap: 4px; margin-bottom: 20px;
-    border-bottom: 2px solid var(--border); padding-bottom: 0;
-  }
-  .tab {
-    padding: 8px 20px; background: none; color: var(--subtext);
-    border: none; cursor: pointer; font-size: 0.95rem;
-    border-bottom: 2px solid transparent; margin-bottom: -2px;
-  }
-  .tab:hover { color: var(--text); }
-  .tab.active {
-    color: var(--accent); border-bottom-color: var(--accent);
-    font-weight: 600;
-  }
-  .tab-content { display: none; }
-  .tab-content.active { display: block; }
-  .status-bar {
-    display: flex; gap: 16px; align-items: center;
-    padding: 12px 16px; background: var(--surface);
-    border-radius: 8px; margin-bottom: 20px;
-  }
-  .status-dot {
-    width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
-  }
-  .dot-green { background: var(--green); }
-  .dot-yellow { background: var(--yellow); }
-  .dot-gray { background: var(--subtext); }
-  .dot-red { background: var(--red); }
-  .status-text { flex: 1; }
-  .status-label { font-size: 0.85rem; color: var(--subtext); }
-  .status-actions { display: flex; gap: 8px; }
-  .stats { display: flex; gap: 16px; font-size: 0.85rem; color: var(--subtext); }
-  .form-group { margin-bottom: 12px; }
-  label {
-    display: block; font-size: 0.85rem; color: var(--subtext);
-    margin-bottom: 4px;
-  }
-  input, select {
-    width: 100%; padding: 8px 12px;
-    background: var(--surface); color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px;
-    font-size: 0.95rem;
-  }
-  input:focus, select:focus { outline: none; border-color: var(--accent); }
-  .row { display: flex; gap: 12px; }
-  .row > .form-group { flex: 1; }
-  .checkbox-group {
-    display: flex; gap: 16px; padding: 8px 0;
-  }
-  .checkbox-group label {
-    display: flex; align-items: center; gap: 6px;
-    cursor: pointer; color: var(--text); font-size: 0.95rem;
-  }
-  .checkbox-group input[type="checkbox"] {
-    width: 16px; height: 16px; accent-color: var(--accent);
-  }
-  button, .btn {
-    padding: 8px 20px; background: var(--accent); color: var(--bg);
-    border: none; border-radius: 6px; cursor: pointer;
-    font-size: 0.9rem; font-weight: 600;
-  }
-  button:hover, .btn:hover { opacity: 0.9; }
-  .btn-sm {
-    padding: 4px 12px; font-size: 0.8rem; border-radius: 4px;
-  }
-  .btn-danger { background: var(--red); }
-  .btn-warn { background: var(--yellow); color: #1e1e2e; }
-  .btn-outline {
-    background: transparent; border: 1px solid var(--border);
-    color: var(--text);
-  }
-  .btn-outline:hover { border-color: var(--accent); }
-  .msg {
-    margin-top: 8px; font-size: 0.85rem; padding: 8px;
-    border-radius: 4px; display: none;
-  }
-  .msg-ok { background: rgba(166,227,161,0.15); color: var(--green); display: block; }
-  .msg-err { background: rgba(243,139,168,0.15); color: var(--red); display: block; }
+/// Requires `ng build worker-ui` before `cargo build --release`.
+#[cfg( not( debug_assertions ) )]
+#[derive( rust_embed::Embed )]
+#[folder = "../dist/worker-ui/browser/"]
+struct Assets;
 
-  /* Queue table */
-  .queue-controls {
-    display: flex; gap: 8px; align-items: center;
-    margin-bottom: 12px; flex-wrap: wrap;
-  }
-  .queue-controls select {
-    width: auto; padding: 6px 10px; font-size: 0.85rem;
-  }
-  table {
-    width: 100%; border-collapse: collapse; font-size: 0.85rem;
-  }
-  th {
-    text-align: left; padding: 8px 10px;
-    color: var(--subtext); border-bottom: 2px solid var(--border);
-    font-weight: 600; font-size: 0.8rem; text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  td {
-    padding: 8px 10px; border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-  }
-  tr:hover td { background: rgba(137,180,250,0.05); }
-  .badge {
-    display: inline-block; padding: 2px 8px; border-radius: 10px;
-    font-size: 0.75rem; font-weight: 600;
-  }
-  .badge-pending { background: rgba(137,180,250,0.2); color: var(--accent); }
-  .badge-processing { background: rgba(249,226,175,0.2); color: var(--yellow); }
-  .badge-completed { background: rgba(166,227,161,0.2); color: var(--green); }
-  .badge-failed { background: rgba(243,139,168,0.2); color: var(--red); }
-  .badge-cancelled { background: rgba(158,158,158,0.2); color: var(--subtext); }
-  .empty-state {
-    text-align: center; padding: 32px; color: var(--subtext);
-    font-size: 0.9rem;
-  }
-</style>
-</head>
-<body>
-<h1>Sunday Worker</h1>
 
-<div class="status-bar">
-  <div id="dot" class="status-dot dot-gray"></div>
-  <div class="status-text">
-    <div id="phase">Loading...</div>
-    <div class="status-label" id="job-info"></div>
-  </div>
-  <div class="status-actions">
-    <button class="btn btn-sm btn-outline" id="pauseBtn" onclick="togglePause()">Pause</button>
-    <button class="btn btn-sm btn-outline" id="forceBtn" onclick="toggleForceOnShift()">Force On-Shift</button>
-  </div>
-</div>
-<div class="stats" style="margin-bottom:20px">
-  <span id="completed">0 completed</span>
-  <span id="failed">0 failed</span>
-  <span id="uptime"></span>
-</div>
+/// Fallback handler (release): serves embedded Angular build assets.
+///
+/// Serves files by path with proper MIME types. Unknown paths get index.html
+/// for Angular's client-side routing (SPA fallback).
+#[cfg( not( debug_assertions ) )]
+async fn fallback_handler(
+    uri: axum::http::Uri,
+) -> axum::response::Response {
+    let path = uri.path().trim_start_matches( '/' );
+    let path = if path.is_empty() { "index.html" } else { path };
 
-<div class="tabs">
-  <button class="tab active" onclick="switchTab('queue')">Job Queue</button>
-  <button class="tab" onclick="switchTab('config')">Configuration</button>
-</div>
-
-<!-- Queue Tab -->
-<div id="tab-queue" class="tab-content active">
-  <div class="queue-controls">
-    <select id="queueFilter" onchange="loadQueue()">
-      <option value="">All Jobs</option>
-      <option value="pending">Pending</option>
-      <option value="processing">Processing</option>
-      <option value="completed">Completed</option>
-      <option value="failed">Failed</option>
-      <option value="cancelled">Cancelled</option>
-      <option value="pending,processing" selected>Active (Pending + Processing)</option>
-    </select>
-    <select id="queueTypeFilter" onchange="loadQueue()">
-      <option value="">All Types</option>
-      <option value="ffprobe">FFprobe</option>
-      <option value="transcode">Transcode</option>
-      <option value="transcription">Transcription</option>
-      <option value="claude-processing">Claude Processing</option>
-    </select>
-    <button class="btn btn-sm btn-outline" onclick="loadQueue()">Refresh</button>
-  </div>
-  <div id="queueTable"></div>
-</div>
-
-<!-- Config Tab -->
-<div id="tab-config" class="tab-content">
-  <h2>Server</h2>
-  <div class="form-group">
-    <label for="server_url">Server URL</label>
-    <input id="server_url" type="text">
-  </div>
-
-  <h2>Worker</h2>
-  <div class="form-group">
-    <label for="worker_id">Worker ID</label>
-    <input id="worker_id" type="text">
-  </div>
-  <div class="form-group">
-    <label for="output_directory">Output Directory (sermons root folder)</label>
-    <input id="output_directory" type="text" placeholder="%OneDriveConsumer%">
-  </div>
-  <div class="form-group">
-    <label>Job Types</label>
-    <div class="checkbox-group">
-      <label><input type="checkbox" id="type_ffprobe" value="ffprobe"> FFprobe</label>
-      <label><input type="checkbox" id="type_transcode" value="transcode"> Transcode</label>
-      <label><input type="checkbox" id="type_transcription" value="transcription"> Transcription</label>
-      <label><input type="checkbox" id="type_claude" value="claude-processing"> Claude Processing</label>
-    </div>
-  </div>
-
-  <h2>Schedule</h2>
-  <div class="checkbox-group" style="margin-bottom:8px">
-    <label><input type="checkbox" id="schedule_enabled"> Enabled</label>
-  </div>
-  <div class="row" id="shift_row">
-    <div class="form-group">
-      <label for="shift_start">Shift Start</label>
-      <input id="shift_start" type="text" placeholder="HH:MM">
-    </div>
-    <div class="form-group">
-      <label for="shift_end">Shift End</label>
-      <input id="shift_end" type="text" placeholder="HH:MM">
-    </div>
-  </div>
-  <div id="run_once_row" style="display:none;margin-bottom:12px">
-    <button class="btn btn-sm" onclick="runOnce()">Run Next Job</button>
-  </div>
-
-  <h2>Timing</h2>
-  <div class="row">
-    <div class="form-group">
-      <label for="poll_interval">Poll Interval (s)</label>
-      <input id="poll_interval" type="number">
-    </div>
-    <div class="form-group">
-      <label for="heartbeat_interval">Heartbeat (s)</label>
-      <input id="heartbeat_interval" type="number">
-    </div>
-    <div class="form-group">
-      <label for="job_delay">Job Delay (s)</label>
-      <input id="job_delay" type="number">
-    </div>
-  </div>
-
-  <h2>Tool Paths</h2>
-  <div class="row">
-    <div class="form-group">
-      <label for="whisper_path">Whisper</label>
-      <input id="whisper_path" type="text">
-    </div>
-    <div class="form-group">
-      <label for="whisper_model">Model</label>
-      <input id="whisper_model" type="text">
-    </div>
-    <div class="form-group">
-      <label for="whisper_compute_type">Compute Type</label>
-      <select id="whisper_compute_type">
-        <option value="float16">float16</option>
-        <option value="float32">float32</option>
-        <option value="int8">int8</option>
-        <option value="int8_float16">int8_float16</option>
-        <option value="int8_float32">int8_float32</option>
-        <option value="auto">auto</option>
-        <option value="default">default</option>
-      </select>
-    </div>
-  </div>
-  <div class="form-group">
-    <label for="env_whisper">Whisper Env Vars (KEY=VALUE per line)</label>
-    <textarea id="env_whisper" rows="2" style="width:100%;padding:8px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:monospace;resize:vertical" placeholder="PYTHONIOENCODING=utf-8"></textarea>
-  </div>
-  <div class="row">
-    <div class="form-group">
-      <label for="claude_path">Claude</label>
-      <input id="claude_path" type="text">
-    </div>
-    <div class="form-group">
-      <label for="ffmpeg_path">FFmpeg</label>
-      <input id="ffmpeg_path" type="text">
-    </div>
-    <div class="form-group">
-      <label for="ffprobe_path">FFprobe</label>
-      <input id="ffprobe_path" type="text">
-    </div>
-  </div>
-  <div class="row">
-    <div class="form-group">
-      <label for="melt_path">Melt (Kdenlive)</label>
-      <input id="melt_path" type="text">
-    </div>
-    <div class="form-group">
-      <label for="melt_video_bitrate">Video Bitrate</label>
-      <input id="melt_video_bitrate" type="text" placeholder="5000k">
-    </div>
-    <div class="form-group">
-      <label for="melt_audio_bitrate">Audio Bitrate</label>
-      <input id="melt_audio_bitrate" type="text" placeholder="192k">
-    </div>
-  </div>
-
-  <button onclick="saveConfig()">Save Configuration</button>
-  <div id="msg" class="msg"></div>
-</div>
-
-<script>
-// --- Tabs ---
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i) => {
-    t.classList.toggle('active', t.textContent.toLowerCase().includes(name));
-  });
-  document.querySelectorAll('.tab-content').forEach(tc => {
-    tc.classList.toggle('active', tc.id === 'tab-' + name);
-  });
-  if (name === 'queue') loadQueue();
+    serve_embedded( path )
+        .unwrap_or_else( || {
+            serve_embedded( "index.html" )
+                .unwrap_or_else( || {
+                    axum::response::Response::builder()
+                        .status( StatusCode::NOT_FOUND )
+                        .body( axum::body::Body::from( "Not found" ) )
+                        .unwrap()
+                } )
+        } )
 }
 
-// --- Status ---
-async function loadStatus() {
-  try {
-    const r = await fetch('/api/status');
-    const s = await r.json();
-    const dot = document.getElementById('dot');
-    dot.className = 'status-dot ' + (
-      !s.connected ? 'dot-red' :
-      s.phase === 'Executing' ? 'dot-yellow' :
-      ['Idle','Polling','Cooldown'].includes(s.phase) ? 'dot-green' : 'dot-gray'
-    );
-    document.getElementById('phase').textContent = s.phase;
-    document.getElementById('job-info').textContent =
-      s.current_job_id ? 'Job #' + s.current_job_id + ' (' + s.current_job_type + ')' : '';
-    document.getElementById('completed').textContent = s.jobs_completed + ' completed';
-    document.getElementById('failed').textContent = s.jobs_failed + ' failed';
 
-    const hrs = Math.floor(s.uptime_secs / 3600);
-    const mins = Math.floor((s.uptime_secs % 3600) / 60);
-    document.getElementById('uptime').textContent = 'Uptime: ' + hrs + 'h ' + mins + 'm';
+/// Resolve an embedded file to an HTTP response with correct content type.
+#[cfg( not( debug_assertions ) )]
+fn serve_embedded( path: &str ) -> Option<axum::response::Response> {
+    let file = Assets::get( path )?;
+    let mime = mime_guess::from_path( path ).first_or_octet_stream();
 
-    const btn = document.getElementById('pauseBtn');
-    if (s.phase === 'Paused') {
-      btn.textContent = 'Resume';
-      btn.className = 'btn btn-sm btn-warn';
-    } else {
-      btn.textContent = 'Pause';
-      btn.className = 'btn btn-sm btn-outline';
+    Some(
+        axum::response::Response::builder()
+            .status( StatusCode::OK )
+            .header( axum::http::header::CONTENT_TYPE, mime.as_ref() )
+            .body( axum::body::Body::from( file.data.into_owned() ) )
+            .unwrap()
+    )
+}
+
+
+/// Fallback handler (dev): reverse-proxies to Angular dev server on port 4201.
+///
+/// All API routes are handled by explicit route handlers above, so this
+/// fallback only forwards asset/page requests to the Angular dev server.
+#[cfg( debug_assertions )]
+async fn fallback_handler(
+    AxumState( state ): AxumState<Arc<WebState>>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    let path = req.uri().path_and_query()
+        .map( |pq| pq.as_str().to_string() )
+        .unwrap_or_else( || "/".to_string() );
+    let url = format!( "http://localhost:4201{}", path );
+
+    match state.http_client.get( &url ).send().await {
+        Ok( resp ) => {
+            let status = axum::http::StatusCode::from_u16( resp.status().as_u16() )
+                .unwrap_or( axum::http::StatusCode::BAD_GATEWAY );
+            let mut builder = axum::response::Response::builder().status( status );
+
+            for ( key, value ) in resp.headers() {
+                if key != "transfer-encoding" {
+                    builder = builder.header( key.as_str(), value.as_bytes() );
+                }
+            }
+
+            let body = resp.bytes().await.unwrap_or_default();
+            builder.body( axum::body::Body::from( body ) )
+                .unwrap_or_else( |_| {
+                    axum::response::Response::builder()
+                        .status( StatusCode::BAD_GATEWAY )
+                        .body( axum::body::Body::from( "Proxy error" ) )
+                        .unwrap()
+                } )
+        }
+        Err( e ) => {
+            tracing::warn!( "Dev proxy error: {}", e );
+            axum::response::Response::builder()
+                .status( StatusCode::BAD_GATEWAY )
+                .body( axum::body::Body::from( format!(
+                    "Angular dev server unreachable at localhost:4201: {}", e
+                ) ) )
+                .unwrap()
+        }
     }
-
-    const forceBtn = document.getElementById('forceBtn');
-    if (s.force_on_shift) {
-      forceBtn.textContent = 'Stop Forcing';
-      forceBtn.className = 'btn btn-sm btn-warn';
-    } else {
-      forceBtn.textContent = 'Force On-Shift';
-      forceBtn.className = 'btn btn-sm btn-outline';
-    }
-  } catch(e) { console.error('Status fetch failed', e); }
 }
-
-async function togglePause() {
-  await fetch('/api/scheduler/pause', { method: 'POST' });
-  setTimeout(loadStatus, 300);
-}
-
-async function toggleForceOnShift() {
-  await fetch('/api/scheduler/force-on-shift', { method: 'POST' });
-  setTimeout(loadStatus, 300);
-}
-
-// --- Config ---
-async function loadConfig() {
-  try {
-    const r = await fetch('/api/config');
-    const c = await r.json();
-    document.getElementById('server_url').value = c.server.url;
-    document.getElementById('worker_id').value = c.worker.id;
-
-    // Set checkboxes
-    const types = c.worker.types || [];
-    document.getElementById('type_transcode').checked = types.includes('transcode');
-    document.getElementById('type_transcription').checked = types.includes('transcription');
-    document.getElementById('type_claude').checked = types.includes('claude-processing');
-    document.getElementById('type_ffprobe').checked = types.includes('ffprobe');
-
-    var scheduleEnabled = c.schedule.enabled !== false;
-    document.getElementById('schedule_enabled').checked = scheduleEnabled;
-    document.getElementById('shift_start').value = c.schedule.shift_start;
-    document.getElementById('shift_end').value = c.schedule.shift_end;
-    updateScheduleUI(scheduleEnabled);
-
-    document.getElementById('poll_interval').value = c.timing.poll_interval_secs;
-    document.getElementById('heartbeat_interval').value = c.timing.heartbeat_interval_secs;
-    document.getElementById('job_delay').value = c.timing.job_delay_secs;
-    document.getElementById('whisper_path').value = c.tools.whisper_path;
-    document.getElementById('whisper_model').value = c.tools.whisper_model;
-    document.getElementById('whisper_compute_type').value = c.tools.whisper_compute_type || 'float16';
-    document.getElementById('claude_path').value = c.tools.claude_path;
-    document.getElementById('ffmpeg_path').value = c.tools.ffmpeg_path;
-    document.getElementById('ffprobe_path').value = c.tools.ffprobe_path || '';
-    document.getElementById('output_directory').value = (c.paths && c.paths.output_directory) || '';
-    document.getElementById('melt_path').value = c.tools.melt_path;
-    document.getElementById('melt_video_bitrate').value = c.tools.melt_video_bitrate || '5000k';
-    document.getElementById('melt_audio_bitrate').value = c.tools.melt_audio_bitrate || '192k';
-
-    // Load per-tool env vars
-    var toolEnv = (c.tools && c.tools.tool_env) || {};
-    document.getElementById('env_whisper').value = envMapToText(toolEnv.whisper || {});
-  } catch(e) { console.error('Config fetch failed', e); }
-}
-
-function envMapToText(map) {
-  return Object.entries(map).map(function(e) { return e[0] + '=' + e[1]; }).join('\n');
-}
-
-function textToEnvMap(text) {
-  var map = {};
-  text.split('\n').forEach(function(line) {
-    var trimmed = line.trim();
-    if (!trimmed || trimmed.indexOf('=') < 0) return;
-    var idx = trimmed.indexOf('=');
-    var key = trimmed.substring(0, idx).trim();
-    var val = trimmed.substring(idx + 1).trim();
-    if (key) map[key] = val;
-  });
-  return map;
-}
-
-function updateScheduleUI(enabled) {
-  document.getElementById('shift_row').style.opacity = enabled ? '1' : '0.5';
-  document.getElementById('shift_start').disabled = !enabled;
-  document.getElementById('shift_end').disabled = !enabled;
-  document.getElementById('run_once_row').style.display = enabled ? 'none' : 'block';
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-  var cb = document.getElementById('schedule_enabled');
-  if (cb) cb.addEventListener('change', function() { updateScheduleUI(this.checked); });
-});
-
-async function runOnce() {
-  try {
-    await fetch('/api/scheduler/run-once', { method: 'POST' });
-  } catch(e) { console.error('Run once failed', e); }
-}
-
-function getSelectedTypes() {
-  const types = [];
-  if (document.getElementById('type_transcode').checked) types.push('transcode');
-  if (document.getElementById('type_transcription').checked) types.push('transcription');
-  if (document.getElementById('type_claude').checked) types.push('claude-processing');
-  if (document.getElementById('type_ffprobe').checked) types.push('ffprobe');
-  return types;
-}
-
-async function saveConfig() {
-  const msg = document.getElementById('msg');
-  try {
-    const body = {
-      server_url: document.getElementById('server_url').value,
-      worker_id: document.getElementById('worker_id').value,
-      types: getSelectedTypes(),
-      schedule_enabled: document.getElementById('schedule_enabled').checked,
-      shift_start: document.getElementById('shift_start').value,
-      shift_end: document.getElementById('shift_end').value,
-      poll_interval_secs: parseInt(document.getElementById('poll_interval').value),
-      heartbeat_interval_secs: parseInt(document.getElementById('heartbeat_interval').value),
-      job_delay_secs: parseInt(document.getElementById('job_delay').value),
-      whisper_path: document.getElementById('whisper_path').value,
-      whisper_model: document.getElementById('whisper_model').value,
-      whisper_compute_type: document.getElementById('whisper_compute_type').value,
-      claude_path: document.getElementById('claude_path').value,
-      ffmpeg_path: document.getElementById('ffmpeg_path').value,
-      ffprobe_path: document.getElementById('ffprobe_path').value,
-      output_directory: document.getElementById('output_directory').value,
-      melt_path: document.getElementById('melt_path').value,
-      melt_video_bitrate: document.getElementById('melt_video_bitrate').value,
-      melt_audio_bitrate: document.getElementById('melt_audio_bitrate').value,
-      tool_env: {
-        whisper: textToEnvMap(document.getElementById('env_whisper').value),
-      },
-    };
-    const r = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (r.ok) {
-      msg.textContent = 'Configuration saved successfully.';
-      msg.className = 'msg msg-ok';
-    } else {
-      const e = await r.json();
-      msg.textContent = 'Error: ' + (e.error || 'Unknown');
-      msg.className = 'msg msg-err';
-    }
-  } catch(e) {
-    msg.textContent = 'Network error: ' + e.message;
-    msg.className = 'msg msg-err';
-  }
-  setTimeout(function() { msg.className = 'msg'; }, 4000);
-}
-
-// --- Queue ---
-async function loadQueue() {
-  const container = document.getElementById('queueTable');
-  const status = document.getElementById('queueFilter').value;
-  const type = document.getElementById('queueTypeFilter').value;
-
-  let url = '/api/queue?limit=50';
-  if (status) url += '&status=' + status;
-  if (type) url += '&type=' + type;
-
-  try {
-    const r = await fetch(url);
-    if (!r.ok) {
-      container.innerHTML = '<div class="empty-state">Could not reach Express server</div>';
-      return;
-    }
-    const data = await r.json();
-    const jobs = data.jobs || [];
-
-    if (jobs.length === 0) {
-      container.innerHTML = '<div class="empty-state">No jobs found</div>';
-      return;
-    }
-
-    let html = '<table><thead><tr>';
-    html += '<th>ID</th><th>Type</th><th>Date</th><th>Status</th>';
-    html += '<th>Worker</th><th>Retry</th><th>Created</th><th></th>';
-    html += '</tr></thead><tbody>';
-
-    for (const j of jobs) {
-      const badge = 'badge-' + j.status;
-      const typeLabel = j.type.replace('video-', 'v-').replace('claude-', 'c-');
-      const created = j.created_at ? new Date(j.created_at).toLocaleDateString() : '';
-      const canCancel = ['pending', 'processing'].includes(j.status);
-
-      html += '<tr>';
-      html += '<td>#' + j.id + '</td>';
-      html += '<td>' + typeLabel + '</td>';
-      html += '<td>' + j.sunday_date + '</td>';
-      html += '<td><span class="badge ' + badge + '">' + j.status + '</span></td>';
-      html += '<td>' + (j.worker_id || '-') + '</td>';
-      html += '<td>' + j.retry_count + '/' + j.max_retries + '</td>';
-      html += '<td>' + created + '</td>';
-      html += '<td>';
-      if (canCancel) {
-        html += '<button class="btn btn-sm btn-danger" onclick="cancelJob(' + j.id + ')">Cancel</button>';
-      }
-      html += '</td>';
-      html += '</tr>';
-
-      if (j.error_message) {
-        html += '<tr><td colspan="8" style="padding:4px 10px 8px 32px;color:var(--red);font-size:0.8rem">';
-        html += j.error_message.substring(0, 200);
-        html += '</td></tr>';
-      }
-    }
-
-    html += '</tbody></table>';
-    html += '<div style="margin-top:8px;font-size:0.8rem;color:var(--subtext)">Showing ' + jobs.length + ' of ' + data.total + ' jobs</div>';
-    container.innerHTML = html;
-  } catch(e) {
-    container.innerHTML = '<div class="empty-state">Error loading queue: ' + e.message + '</div>';
-  }
-}
-
-async function cancelJob(id) {
-  if (!confirm('Cancel job #' + id + '?')) return;
-  try {
-    const r = await fetch('/api/queue/' + id + '/cancel', { method: 'PUT' });
-    if (r.ok) {
-      loadQueue();
-    } else {
-      const e = await r.json();
-      alert('Failed to cancel: ' + (e.error || 'Unknown error'));
-    }
-  } catch(e) {
-    alert('Network error: ' + e.message);
-  }
-}
-
-// --- Init ---
-loadConfig();
-loadStatus();
-loadQueue();
-setInterval(loadStatus, 3000);
-setInterval(function() {
-  if (document.getElementById('tab-queue').classList.contains('active')) {
-    loadQueue();
-  }
-}, 10000);
-</script>
-</body>
-</html>"#;

@@ -36,7 +36,7 @@
       <!-- Date + badges -->
       <div class="folder-date">
         <div class="date-line">
-          <span class="date-text">{{ folder.displayDate }}</span>
+          <a class="date-text" [routerLink]="monthRoute( folder.name )" matTooltip="Open month in planner">{{ folder.displayDate }}</a>
           <span class="stage-badge" [class.stage-1]="folder.stage === 1" [class.stage-2]="folder.stage === 2">
             Stage {{ folder.stage }}
           </span>
@@ -118,31 +118,47 @@
           </mat-icon>
           <mat-icon
             [class.icon-ready]="folder.hasProduction"
-            [class.icon-missing]="!folder.hasProduction"
-            [class.icon-clickable]="folder.hasKdenlive && !folder.hasProduction"
-            [matTooltip]="folder.hasProduction ? 'Production MP4 ready' : (folder.hasKdenlive ? 'Queue transcode' : 'No production MP4')"
-            (click)="folder.hasKdenlive && !folder.hasProduction ? approveKdenlive( folder ) : null">
+            [class.icon-pending]="!folder.hasProduction && jobStatus( folder.name, 'transcode' ) === 'pending'"
+            [class.icon-processing]="!folder.hasProduction && jobStatus( folder.name, 'transcode' ) === 'processing'"
+            [class.icon-missing]="!folder.hasProduction && !jobStatus( folder.name, 'transcode' )"
+            [class.icon-clickable]="folder.hasKdenlive && !folder.hasProduction && !jobStatus( folder.name, 'transcode' )"
+            [matTooltip]="folder.hasProduction ? 'Production MP4 ready' : jobStatus( folder.name, 'transcode' ) === 'processing' ? 'Transcode in progress' : jobStatus( folder.name, 'transcode' ) === 'pending' ? 'Transcode queued' : (folder.hasKdenlive ? 'Queue transcode' : 'No production MP4')"
+            (click)="folder.hasKdenlive && !folder.hasProduction && !jobStatus( folder.name, 'transcode' ) ? approveKdenlive( folder ) : null">
             movie
           </mat-icon>
           <mat-icon
             [class.icon-ready]="folder.hasTranscription"
-            [class.icon-missing]="!folder.hasTranscription"
-            [matTooltip]="folder.hasTranscription ? 'Transcription ready' : 'No transcription'">
+            [class.icon-pending]="!folder.hasTranscription && jobStatus( folder.name, 'transcription' ) === 'pending'"
+            [class.icon-processing]="!folder.hasTranscription && jobStatus( folder.name, 'transcription' ) === 'processing'"
+            [class.icon-missing]="!folder.hasTranscription && !jobStatus( folder.name, 'transcription' )"
+            [class.icon-clickable]="folder.hasVideo && !folder.hasTranscription && !jobStatus( folder.name, 'transcription' )"
+            [matTooltip]="folder.hasTranscription ? 'Transcription ready' : jobStatus( folder.name, 'transcription' ) === 'processing' ? 'Transcription in progress' : jobStatus( folder.name, 'transcription' ) === 'pending' ? 'Transcription queued' : (folder.hasVideo ? 'Queue transcription' : 'No transcription')"
+            (click)="folder.hasVideo && !folder.hasTranscription && !jobStatus( folder.name, 'transcription' ) ? queueTranscription( folder ) : null">
             subtitles
           </mat-icon>
           <mat-icon
             [class.icon-ready]="folder.hasSummary"
-            [class.icon-missing]="!folder.hasSummary"
-            [matTooltip]="folder.hasSummary ? 'Summary ready' : 'No summary'">
+            [class.icon-pending]="!folder.hasSummary && jobStatus( folder.name, 'claude-processing' ) === 'pending'"
+            [class.icon-processing]="!folder.hasSummary && jobStatus( folder.name, 'claude-processing' ) === 'processing'"
+            [class.icon-missing]="!folder.hasSummary && !jobStatus( folder.name, 'claude-processing' )"
+            [class.icon-clickable]="folder.hasTranscription && !folder.hasSummary && !jobStatus( folder.name, 'claude-processing' )"
+            [matTooltip]="folder.hasSummary ? 'Summary ready' : jobStatus( folder.name, 'claude-processing' ) === 'processing' ? 'Claude processing in progress' : jobStatus( folder.name, 'claude-processing' ) === 'pending' ? 'Claude processing queued' : (folder.hasTranscription ? 'Queue claude processing' : 'No summary')"
+            (click)="folder.hasTranscription && !folder.hasSummary && !jobStatus( folder.name, 'claude-processing' ) ? queueClaude( folder ) : null">
             article
           </mat-icon>
           <mat-icon
             [class.icon-ready]="!!folder.youtubeUrl"
             [class.icon-missing]="!folder.youtubeUrl"
-            [class.icon-clickable]="!!folder.youtubeUrl"
-            [matTooltip]="folder.youtubeUrl ? 'Open on YouTube' : 'Not uploaded to YouTube'"
-            (click)="folder.youtubeUrl ? openYoutube( folder.youtubeUrl ) : null">
+            class="icon-clickable"
+            [matTooltip]="folder.youtubeUrl ? 'Edit YouTube URL' : 'Set YouTube URL'"
+            (click)="openYoutube( folder )">
             smart_display
+          </mat-icon>
+          <mat-icon *ngIf="folder.youtubeUrl"
+            class="icon-missing icon-clickable"
+            matTooltip="Archive folder"
+            (click)="archiveFolder( folder )">
+            archive
           </mat-icon>
         </ng-container>
       </div>

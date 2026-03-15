@@ -1,4 +1,5 @@
 mod api_client;
+mod broadcast;
 mod config;
 mod heartbeat;
 mod job_runner;
@@ -58,8 +59,11 @@ fn main() -> Result<()> {
     );
     tracing::info!( "Web UI port: {}", config.web_ui.port );
 
+    // Create broadcast channel for WebSocket push events
+    let ( event_tx, _event_rx ) = tokio::sync::broadcast::channel::<broadcast::WorkerEvent>( 128 );
+
     // Create shared state
-    let state = Arc::new( AppState::new( config.clone() ) );
+    let state = Arc::new( AppState::new( config.clone(), event_tx ) );
 
     // Create API client
     let api = Arc::new( ApiClient::new( &config.server.url ) );

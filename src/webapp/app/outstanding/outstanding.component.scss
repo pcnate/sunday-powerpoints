@@ -107,6 +107,11 @@
   font-size: 0.85rem;
   font-weight: 500;
   color: #e9ecef;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 .stage-badge {
@@ -225,6 +230,16 @@ mat-progress-bar {
   font-size: 16px !important;
   width: 16px !important;
   height: 16px !important;
+}
+
+.icon-pending {
+  color: #ffc107 !important;
+  opacity: 0.9 !important;
+}
+
+.icon-processing {
+  color: #fd7e14 !important;
+  opacity: 1 !important;
 }
 
 .icon-clickable {

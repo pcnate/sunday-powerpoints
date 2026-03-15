@@ -24,9 +24,15 @@
 
   <button mat-stroked-button class="closing-song-button" (click)="selectClosingSong()"
           [class.empty]="!closingSong"
+          [class.no-ccli]="closingSong && !closingSong.ccli"
           matTooltip="Set closing song for this month">
     <mat-icon>music_note</mat-icon>
     {{ closingSong ? songDisplay( closingSong ) : 'No Closing Song' }}
+  </button>
+  <button mat-icon-button *ngIf="closingSong"
+          (click)="openSongDetail( closingSong )"
+          matTooltip="Closing song details">
+    <mat-icon>info_outline</mat-icon>
   </button>
 
   <span class="header-spacer"></span>
@@ -65,7 +71,7 @@
           <mat-card-title>{{ week.label }}</mat-card-title>
           <mat-card-subtitle>
             {{ week.date }}
-            <span class="folder-badge approved" *ngIf="week.folder?.isApproved && !isPastSunday( week.date )">Ready</span>
+            <span class="folder-badge approved" *ngIf="week.folder?.isApproved && !isPastSunday( week.date ) && !week.folder?.archived">Ready</span>
             <span class="folder-badge backlog" *ngIf="week.folder?.backlog">Backlog</span>
             <span class="folder-badge archived" *ngIf="week.folder?.archived">Archived</span>
           </mat-card-subtitle>
@@ -395,8 +401,13 @@
 
           <!-- Closing song -->
           <div class="song-slot" *ngIf="closingSong">
-            <span class="slot-label">Closing</span>
-            <span class="song-display">{{ songDisplay( closingSong ) }}</span>
+            <span class="slot-label"
+                  [class.no-ccli]="!closingSong.ccli"
+                  [matTooltip]="!closingSong.ccli ? 'Missing CCLI license' : ''">Closing</span>
+            <button mat-stroked-button class="chorus-button"
+                    (click)="openSongDetail( closingSong )">
+              {{ songDisplay( closingSong ) }}
+            </button>
           </div>
         </div>
       </mat-card-content>

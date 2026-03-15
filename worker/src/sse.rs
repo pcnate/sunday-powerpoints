@@ -104,7 +104,7 @@ async fn connect(
                 while let Some( pos ) = buffer.find( '\n' ) {
                     let line = buffer[ ..pos ].trim_end_matches( '\r' ).to_string();
                     buffer.drain( ..=pos );
-                    process_line( &line );
+                    process_line( &line, state );
                 }
             }
             Ok( None ) => {
@@ -118,14 +118,17 @@ async fn connect(
 }
 
 
-/// Process a single SSE line.
-fn process_line( line: &str ) {
+/// Process a single SSE line, waking the scheduler on job:created.
+fn process_line( line: &str, state: &AppState ) {
     if line.is_empty() || line.starts_with( ':' ) {
         return;
     }
 
     if let Some( event ) = line.strip_prefix( "event: " ) {
         tracing::debug!( "SSE event: {}", event );
+        if event == "job:created" || event == "job:updated" {
+            state.poll_notify.notify_one();
+        }
     }
 
     if let Some( _data ) = line.strip_prefix( "data: " ) {

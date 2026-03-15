@@ -1,5 +1,5 @@
 use anyhow::Result;
-use muda::{ Menu, MenuEvent, MenuItem, PredefinedMenuItem };
+use muda::{ CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem };
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tray_icon::{ TrayIcon, TrayIconBuilder, Icon };
@@ -102,6 +102,12 @@ fn build_tooltip( state: &TrayState ) -> String {
 struct MenuIds {
     status: MenuItem,
     pause_resume: MenuItem,
+    force_on_shift: CheckMenuItem,
+    run_once: MenuItem,
+    type_ffprobe: CheckMenuItem,
+    type_transcode: CheckMenuItem,
+    type_transcription: CheckMenuItem,
+    type_claude: CheckMenuItem,
     open_config: MenuItem,
     quit: MenuItem,
 }
@@ -165,17 +171,30 @@ impl TrayApp {
         let menu = Menu::new();
 
         let status = MenuItem::new( "Sunday Worker — Starting...", false, None );
-        let separator = PredefinedMenuItem::separator();
         let pause_resume = MenuItem::new( "Pause", true, None );
+        let force_on_shift = CheckMenuItem::new( "Force On-Shift", true, false, None );
+        let run_once = MenuItem::new( "Run Once", true, None );
+
+        let type_ffprobe = CheckMenuItem::new( "FFprobe", true, true, None );
+        let type_transcode = CheckMenuItem::new( "Transcode", true, true, None );
+        let type_transcription = CheckMenuItem::new( "Transcription", true, true, None );
+        let type_claude = CheckMenuItem::new( "Claude Processing", true, true, None );
+
         let open_config = MenuItem::new( "Open Config", true, None );
-        let separator2 = PredefinedMenuItem::separator();
         let quit = MenuItem::new( "Exit", true, None );
 
         menu.append( &status )?;
-        menu.append( &separator )?;
+        menu.append( &PredefinedMenuItem::separator() )?;
         menu.append( &pause_resume )?;
+        menu.append( &force_on_shift )?;
+        menu.append( &run_once )?;
+        menu.append( &PredefinedMenuItem::separator() )?;
+        menu.append( &type_ffprobe )?;
+        menu.append( &type_transcode )?;
+        menu.append( &type_transcription )?;
+        menu.append( &type_claude )?;
+        menu.append( &PredefinedMenuItem::separator() )?;
         menu.append( &open_config )?;
-        menu.append( &separator2 )?;
         menu.append( &quit )?;
 
         let icon = generate_icon( TrayColor::Gray );
@@ -190,6 +209,12 @@ impl TrayApp {
         self.menu_ids = Some( MenuIds {
             status,
             pause_resume,
+            force_on_shift,
+            run_once,
+            type_ffprobe,
+            type_transcode,
+            type_transcription,
+            type_claude,
             open_config,
             quit,
         } );
@@ -217,7 +242,7 @@ impl TrayApp {
             let _ = tray.set_tooltip( Some( &tooltip ) );
         }
 
-        // Update menu status text
+        // Update menu status text and check states
         if let Some( ref ids ) = self.menu_ids {
             let status_text = format!( "Status: {}", tray_state.phase );
             ids.status.set_text( &status_text );
@@ -229,6 +254,27 @@ impl TrayApp {
                 "Pause"
             };
             ids.pause_resume.set_text( pause_text );
+
+            // Sync force-on-shift check state
+            ids.force_on_shift.set_checked( tray_state.force_on_shift );
+
+            // Sync job type check states: checked = enabled AND not paused
+            // Disabled (grayed out) = not in config.worker.types
+            let ffprobe_enabled = tray_state.active_types.contains( &"ffprobe".to_string() );
+            ids.type_ffprobe.set_enabled( ffprobe_enabled );
+            ids.type_ffprobe.set_checked( ffprobe_enabled && !tray_state.paused_types.contains( &"ffprobe".to_string() ) );
+
+            let transcode_enabled = tray_state.active_types.contains( &"transcode".to_string() );
+            ids.type_transcode.set_enabled( transcode_enabled );
+            ids.type_transcode.set_checked( transcode_enabled && !tray_state.paused_types.contains( &"transcode".to_string() ) );
+
+            let transcription_enabled = tray_state.active_types.contains( &"transcription".to_string() );
+            ids.type_transcription.set_enabled( transcription_enabled );
+            ids.type_transcription.set_checked( transcription_enabled && !tray_state.paused_types.contains( &"transcription".to_string() ) );
+
+            let claude_enabled = tray_state.active_types.contains( &"claude-processing".to_string() );
+            ids.type_claude.set_enabled( claude_enabled );
+            ids.type_claude.set_checked( claude_enabled && !tray_state.paused_types.contains( &"claude-processing".to_string() ) );
         }
     }
 }
@@ -274,6 +320,18 @@ impl ApplicationHandler for TrayApp {
                 } else if event.id() == ids.pause_resume.id() {
                     self.is_paused = !self.is_paused;
                     let _ = self.tray_tx.try_send( TrayCommand::TogglePause );
+                } else if event.id() == ids.force_on_shift.id() {
+                    let _ = self.tray_tx.try_send( TrayCommand::ToggleForceOnShift );
+                } else if event.id() == ids.run_once.id() {
+                    let _ = self.tray_tx.try_send( TrayCommand::RunOnce );
+                } else if event.id() == ids.type_ffprobe.id() {
+                    let _ = self.tray_tx.try_send( TrayCommand::TogglePauseJobType( "ffprobe".to_string() ) );
+                } else if event.id() == ids.type_transcode.id() {
+                    let _ = self.tray_tx.try_send( TrayCommand::TogglePauseJobType( "transcode".to_string() ) );
+                } else if event.id() == ids.type_transcription.id() {
+                    let _ = self.tray_tx.try_send( TrayCommand::TogglePauseJobType( "transcription".to_string() ) );
+                } else if event.id() == ids.type_claude.id() {
+                    let _ = self.tray_tx.try_send( TrayCommand::TogglePauseJobType( "claude-processing".to_string() ) );
                 } else if event.id() == ids.open_config.id() {
                     let _ = self.tray_tx.try_send( TrayCommand::OpenConfig );
                 }

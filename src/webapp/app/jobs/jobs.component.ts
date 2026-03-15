@@ -1,5 +1,6 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { MatTableModule } from '@angular/material/table';
@@ -76,6 +77,7 @@ interface WorkerInfo {
     MatProgressSpinnerModule,
     MatCardModule,
     MatDialogModule,
+    RouterLink,
   ],
   templateUrl: './jobs.component.html',
   styleUrls: [ './jobs.component.scss' ]
@@ -87,8 +89,8 @@ export class JobsComponent implements OnInit, OnDestroy {
   totalJobs = 0;
   loading = false;
 
-  statusFilter = 'pending,processing';
-  typeFilter = '';
+  statusFilters: string[] = [ 'pending', 'processing' ];
+  typeFilters: string[] = [];
 
   displayedColumns = [ 'id', 'type', 'sunday_date', 'status', 'worker_id', 'retry', 'created_at', 'actions' ];
 
@@ -136,8 +138,8 @@ export class JobsComponent implements OnInit, OnDestroy {
    */
   loadJobs(): void {
     let url = `/api/jobs?limit=50`;
-    if ( this.statusFilter ) url += `&status=${ this.statusFilter }`;
-    if ( this.typeFilter ) url += `&type=${ this.typeFilter }`;
+    if ( this.statusFilters.length > 0 ) url += `&status=${ this.statusFilters.join( ',' ) }`;
+    if ( this.typeFilters.length > 0 ) url += `&type=${ this.typeFilters.join( ',' ) }`;
 
     this.http.get<{ jobs: Job[]; total: number }>( url )
       .subscribe({
@@ -228,6 +230,19 @@ export class JobsComponent implements OnInit, OnDestroy {
       case 'stale': return 'dot-red';
       default: return 'dot-gray';
     }
+  }
+
+
+  /**
+   * Build a routerLink path to the planning view for a sunday_date's month.
+   *
+   * @param sundayDate - YYYYMMDD format date string
+   * @returns route path segments
+   */
+  monthRoute( sundayDate: string ): string[] {
+    const year = sundayDate.substring( 0, 4 );
+    const month = String( parseInt( sundayDate.substring( 4, 6 ), 10 ) );
+    return [ '/planning', year, month ];
   }
 
 

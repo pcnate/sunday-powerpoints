@@ -935,6 +935,7 @@ async function scanFolderMetadata( folderPath: string, folderName: string, backl
     sermonSpeaker: null as string | null,
     backlog,
     archived,
+    relativePath: toRelativePath( folderPath ),
     files,
   };
 }
@@ -1359,6 +1360,107 @@ app.post( '/api/folders/:name/archive', async ( req: Request, res: Response ) =>
     await fs.promises.mkdir( path.join( config.outputDirectory, year ), { recursive: true } );
     await fs.promises.rename( sourceDir, archiveDir );
     console.log( `[ARCHIVE] Moved ${ folder } to ${ year }/` );
+
+    // Remove stale cache entry so scanFolders doesn't ENOENT on the old path
+    sundayFolders.delete( folder );
+
+    // Update database paths to reflect the new archive location
+    // Three steps: normalize backslashes, strip absolute prefix, replace archive prefix
+    try {
+      if ( await healthCheck() ) {
+        const pool = getPool();
+        const bs = '\\';
+        const absPrefix = resolveToAbsolutePath( config.rootPath || '%OneDriveConsumer%' )
+          .replace( /\\/g, '/' ).replace( /\/+$/, '' ) + '/';
+        const oldRel = toRelativePath( sourceDir ) + '/';
+        const newRel = toRelativePath( archiveDir ) + '/';
+
+        // Step 1: Normalize backslashes → forward slashes
+        for ( const col of [ 'input_path', 'output_path' ] as const ) {
+          const nullGuard = col === 'output_path' ? `AND ${ col } IS NOT NULL` : '';
+          await pool.query(
+            `UPDATE jobs SET ${ col } = REPLACE( ${ col }, ?, '/' )
+             WHERE sunday_date = ? ${ nullGuard } AND LOCATE( ?, ${ col } ) > 0`,
+            [ bs, folder, bs ]
+          );
+        }
+        await pool.query(
+          `UPDATE videos SET input_path = REPLACE( input_path, ?, '/' )
+           WHERE sunday_date = ? AND LOCATE( ?, input_path ) > 0`,
+          [ bs, folder, bs ]
+        );
+
+        // Step 2: Strip absolute prefix (e.g. C:/Users/.../OneDrive/)
+        for ( const col of [ 'input_path', 'output_path' ] as const ) {
+          const nullGuard = col === 'output_path' ? `AND ${ col } IS NOT NULL` : '';
+          await pool.query(
+            `UPDATE jobs SET ${ col } = SUBSTRING( ${ col }, ? )
+             WHERE sunday_date = ? ${ nullGuard } AND ${ col } LIKE CONCAT( ?, '%' )`,
+            [ absPrefix.length + 1, folder, absPrefix ]
+          );
+        }
+        await pool.query(
+          `UPDATE videos SET input_path = SUBSTRING( input_path, ? )
+           WHERE sunday_date = ? AND input_path LIKE CONCAT( ?, '%' )`,
+          [ absPrefix.length + 1, folder, absPrefix ]
+        );
+
+        // Step 3: Replace old prefix with archived prefix
+        for ( const col of [ 'input_path', 'output_path' ] as const ) {
+          const nullGuard = col === 'output_path' ? `AND ${ col } IS NOT NULL` : '';
+          await pool.query(
+            `UPDATE jobs SET ${ col } = REPLACE( ${ col }, ?, ? )
+             WHERE sunday_date = ? ${ nullGuard } AND ${ col } LIKE CONCAT( ?, '%' )`,
+            [ oldRel, newRel, folder, oldRel ]
+          );
+        }
+        await pool.query(
+          `UPDATE videos SET input_path = REPLACE( input_path, ?, ? )
+           WHERE sunday_date = ? AND input_path LIKE CONCAT( ?, '%' )`,
+          [ oldRel, newRel, folder, oldRel ]
+        );
+
+        // Steps 1-3 for jobs.metadata vtt_path
+        await pool.query(
+          `UPDATE jobs SET metadata = JSON_SET( metadata, '$.vtt_path',
+             REPLACE( JSON_UNQUOTE( JSON_EXTRACT( metadata, '$.vtt_path' ) ), ?, '/' ) )
+           WHERE sunday_date = ? AND metadata IS NOT NULL
+             AND JSON_EXTRACT( metadata, '$.vtt_path' ) IS NOT NULL
+             AND LOCATE( ?, JSON_UNQUOTE( JSON_EXTRACT( metadata, '$.vtt_path' ) ) ) > 0`,
+          [ bs, folder, bs ]
+        );
+        await pool.query(
+          `UPDATE jobs SET metadata = JSON_SET( metadata, '$.vtt_path',
+             SUBSTRING( JSON_UNQUOTE( JSON_EXTRACT( metadata, '$.vtt_path' ) ), ? ) )
+           WHERE sunday_date = ? AND metadata IS NOT NULL
+             AND JSON_EXTRACT( metadata, '$.vtt_path' ) IS NOT NULL
+             AND JSON_UNQUOTE( JSON_EXTRACT( metadata, '$.vtt_path' ) ) LIKE CONCAT( ?, '%' )`,
+          [ absPrefix.length + 1, folder, absPrefix ]
+        );
+        await pool.query(
+          `UPDATE jobs SET metadata = JSON_SET( metadata, '$.vtt_path',
+             REPLACE( JSON_UNQUOTE( JSON_EXTRACT( metadata, '$.vtt_path' ) ), ?, ? ) )
+           WHERE sunday_date = ? AND metadata IS NOT NULL
+             AND JSON_EXTRACT( metadata, '$.vtt_path' ) IS NOT NULL
+             AND JSON_UNQUOTE( JSON_EXTRACT( metadata, '$.vtt_path' ) ) LIKE CONCAT( ?, '%' )`,
+          [ oldRel, newRel, folder, oldRel ]
+        );
+
+        // Delete duplicate video rows that match the new path (created by post-archive scans)
+        await pool.query(
+          `DELETE v1 FROM videos v1
+           INNER JOIN videos v2
+             ON v1.input_path = v2.input_path AND v1.id > v2.id
+           WHERE v1.sunday_date = ?`,
+          [ folder ]
+        );
+
+        console.log( `[ARCHIVE] Updated database paths: ${ oldRel } → ${ newRel }` );
+      }
+    } catch ( dbErr ) {
+      console.error( '[ARCHIVE] Failed to update database paths (folder was moved):', dbErr );
+    }
+
     io.emit( 'folder-changes', { name: folder } );
     res.json({ ok: true });
   } catch ( err ) {
@@ -1619,6 +1721,29 @@ app.put( '/api/folders/:name/unapprove', async ( req: Request, res: Response ) =
 
 
 /**
+ * Get recent jobs of a specific type for a folder, newest first.
+ */
+app.get( '/api/folders/:name/job-history/:type', async ( req: Request, res: Response ) => {
+  const { name, type } = req.params;
+  if ( !name || !/^\d{8}$/.test( name ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name' });
+    return;
+  }
+
+  try {
+    const pool = getPool();
+    const [ rows ] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM jobs WHERE sunday_date = ? AND type = ? ORDER BY created_at DESC LIMIT 5`,
+      [ name, type ]
+    );
+    res.json( rows );
+  } catch {
+    res.json( [] );
+  }
+});
+
+
+/**
  * List video files in a Sunday folder's Vids/ subdirectory.
  * Returns MKV and MP4 files (excluding production MP4s) with file size and type.
  */
@@ -1812,6 +1937,133 @@ app.post( '/api/folders/:name/approve-kdenlive', async ( req: Request, res: Resp
   } catch ( err ) {
     console.error( `[KDENLIVE] Failed to approve Kdenlive for ${ folderName }:`, err );
     res.status( 500 ).json({ error: 'Failed to queue transcode job' });
+  }
+});
+
+
+/**
+ * Queue a transcription job for a folder.
+ * Accepts optional `video` body param to specify which video file to transcribe.
+ * Defaults to the production MP4 if no video is specified.
+ */
+app.post( '/api/folders/:name/queue-transcription', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const folderPath = await resolveFolderPath( folderName );
+  if ( !folderPath ) {
+    res.status( 404 ).json({ error: 'Folder not found' });
+    return;
+  }
+
+  try {
+    const videoFile = req.body?.video || `${ folderName }-production.mp4`;
+    const videoPath = path.join( folderPath, 'Vids', videoFile );
+    await fs.promises.access( videoPath );
+
+    const inputPath = toJobPath( videoPath );
+    const outputPath = toJobPath( videoPath.replace( /\.(mp4|mkv)$/i, '.vtt' ) );
+
+    // Cancel any existing active transcription jobs for this date
+    const pool = getPool();
+    await pool.query(
+      `UPDATE jobs SET status = 'cancelled' WHERE type = 'transcription' AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
+      [ folderName ]
+    );
+
+    const job = await createJobIfNotExists({
+      type: 'transcription',
+      sunday_date: folderName,
+      input_path: inputPath,
+      output_path: outputPath,
+      metadata: { whisper_model: 'large-v3', language: 'en' },
+    });
+
+    if ( !job ) {
+      res.status( 500 ).json({ error: 'Failed to create job' });
+      return;
+    }
+
+    io.emit( 'job:created', job );
+    console.log( `[QUEUE] Queued transcription job #${ job.id } for ${ folderName }` );
+    res.json({ ok: true, jobId: job.id });
+  } catch {
+    res.status( 404 ).json({ error: 'Production MP4 not found' });
+  }
+});
+
+
+/**
+ * Queue a claude-processing job for a folder that has a VTT but no Summary.
+ */
+app.post( '/api/folders/:name/queue-claude', async ( req: Request, res: Response ) => {
+  const folderName = req.params.name;
+  if ( !folderName || !/^\d{8}$/.test( folderName ) ) {
+    res.status( 400 ).json({ error: 'Invalid folder name (YYYYMMDD required)' });
+    return;
+  }
+
+  const folderPath = await resolveFolderPath( folderName );
+  if ( !folderPath ) {
+    res.status( 404 ).json({ error: 'Folder not found' });
+    return;
+  }
+
+  try {
+    // Find the VTT file
+    const vidsDir = path.join( folderPath, 'Vids' );
+    const vidsFiles = await fs.promises.readdir( vidsDir );
+    const vttFile = vidsFiles.find( f => f.toLowerCase().endsWith( '.vtt' ) );
+
+    if ( !vttFile ) {
+      res.status( 404 ).json({ error: 'No VTT file found in Vids/' });
+      return;
+    }
+
+    const inputPath = toJobPath( path.join( vidsDir, vttFile ) );
+    const outputPath = toJobPath( path.join( folderPath, 'Summary.txt' ) );
+
+    // Fetch the editable prompt from settings
+    let prompt = '';
+    try {
+      const pool = getPool();
+      const [ promptRows ] = await pool.query<RowDataPacket[]>(
+        "SELECT `value` FROM settings WHERE `key` = 'claude-prompt'"
+      );
+      if ( promptRows.length > 0 ) prompt = promptRows[ 0 ].value;
+    } catch {
+      // Use empty prompt if settings unavailable
+    }
+
+    // Cancel any existing active claude-processing jobs for this date
+    const pool = getPool();
+    await pool.query(
+      `UPDATE jobs SET status = 'cancelled' WHERE type = 'claude-processing' AND sunday_date = ? AND status IN ('pending', 'queued', 'processing')`,
+      [ folderName ]
+    );
+
+    const job = await createJobIfNotExists({
+      type: 'claude-processing',
+      sunday_date: folderName,
+      input_path: inputPath,
+      output_path: outputPath,
+      metadata: { prompt_template: 'summary', prompt },
+    });
+
+    if ( !job ) {
+      res.status( 500 ).json({ error: 'Failed to create job' });
+      return;
+    }
+
+    io.emit( 'job:created', job );
+    console.log( `[QUEUE] Queued claude-processing job #${ job.id } for ${ folderName }` );
+    res.json({ ok: true, jobId: job.id });
+  } catch ( err ) {
+    console.error( `[QUEUE] Failed to queue claude-processing for ${ folderName }:`, err );
+    res.status( 500 ).json({ error: 'Failed to queue claude-processing job' });
   }
 });
 
@@ -2694,9 +2946,8 @@ async function scanFolders() {
         // remove from cache if it is not a directory
         sundayFolders.delete( key );
       }
-    } catch ( error ) {
-      console.error( `Error checking folder ${ folder.path }:`, error );
-      // remove from cache if it does not exist anymore
+    } catch {
+      // Folder was moved or deleted — remove stale cache entry
       sundayFolders.delete( key );
     }
   }
@@ -2729,6 +2980,7 @@ async function scanFolders() {
 
     for ( const key of Object.keys( sundayFolders.cache ) ) {
       const folder = sundayFolders.cache[ key ];
+      if ( folder.archived ) continue;
       const vidsDir = path.join( folder.path, 'Vids' );
       const sundayDate = key.replace( /-/g, '' );
 
@@ -3142,6 +3394,22 @@ app.post( '/api/update-song', ( req: Request, res: Response ) => {
       if ( slotMatch ) {
         const slotId = slotMatch[ 2 ] ? `${ slotMatch[ 1 ] }${ slotMatch[ 2 ] }` : slotMatch[ 1 ];
         deleteShortcutsByPrefix( weekFolder, `song ${ slotId } ` );
+
+        // Clearing a slot (song is null) — just remove the shortcut and DB selection
+        if ( !song ) {
+          try {
+            if ( await healthCheck() ) {
+              const slotNum = parseInt( slotMatch[ 1 ] );
+              const slotSuffix = slotMatch[ 2 ]?.toLowerCase() || undefined;
+              await removeSongSelection( date, 'song', slotNum, slotSuffix );
+              console.log( `[SONG DB] Removed song selection: ${ date } slot ${ slotId }` );
+            }
+          } catch ( err ) {
+            console.error( '[SONG DB] Failed to remove song selection:', err );
+          }
+          return res.json({ success: true, status: 'cleared' });
+        }
+
         const songFile = findSongFile( song, config.songsDirectory );
         if ( !songFile ) {
           console.log( `[SONG SHORTCUT] Song ${ slotId }: Song file not found in library for ${ song.number || '' } ${ song.name }` );

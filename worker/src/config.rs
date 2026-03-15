@@ -168,7 +168,7 @@ impl Default for AppConfig {
             timing: TimingConfig {
                 poll_interval_secs: 30,
                 heartbeat_interval_secs: 30,
-                job_delay_secs: 10,
+                job_delay_secs: 5,
             },
             tools: ToolsConfig {
                 whisper_path: "whisper".to_string(),

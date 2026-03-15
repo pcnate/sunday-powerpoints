@@ -93,6 +93,15 @@
 // Jobs table
 .jobs-table {
   width: 100%;
+
+  a {
+    color: #89b4fa;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
 }
 
 .badge {

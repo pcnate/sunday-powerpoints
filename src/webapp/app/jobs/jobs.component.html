@@ -38,9 +38,7 @@
 <div class="filters-row">
   <mat-form-field appearance="outline">
     <mat-label>Status</mat-label>
-    <mat-select [(value)]="statusFilter" (selectionChange)="loadJobs()">
-      <mat-option value="">All</mat-option>
-      <mat-option value="pending,processing">Active</mat-option>
+    <mat-select [(value)]="statusFilters" multiple (selectionChange)="loadJobs()">
       <mat-option value="pending">Pending</mat-option>
       <mat-option value="processing">Processing</mat-option>
       <mat-option value="completed">Completed</mat-option>
@@ -51,8 +49,7 @@
 
   <mat-form-field appearance="outline">
     <mat-label>Type</mat-label>
-    <mat-select [(value)]="typeFilter" (selectionChange)="loadJobs()">
-      <mat-option value="">All Types</mat-option>
+    <mat-select [(value)]="typeFilters" multiple (selectionChange)="loadJobs()">
       <mat-option value="ffprobe">FFprobe</mat-option>
       <mat-option value="transcode">Transcode</mat-option>
       <mat-option value="transcription">Transcription</mat-option>
@@ -87,7 +84,9 @@
 
   <ng-container matColumnDef="sunday_date">
     <th mat-header-cell *matHeaderCellDef mat-sort-header>Date</th>
-    <td mat-cell *matCellDef="let job">{{ job.sunday_date }}</td>
+    <td mat-cell *matCellDef="let job">
+      <a [routerLink]="monthRoute( job.sunday_date )" matTooltip="Open month in planner">{{ job.sunday_date }}</a>
+    </td>
   </ng-container>
 
   <ng-container matColumnDef="status">

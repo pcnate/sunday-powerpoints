@@ -115,9 +115,7 @@
       <div class="queue-controls">
         <mat-form-field appearance="outline" class="queue-filter">
           <mat-label>Status</mat-label>
-          <mat-select [(ngModel)]="queueFilter" (selectionChange)="loadQueue()">
-            <mat-option value="">All Jobs</mat-option>
-            <mat-option value="pending,processing">Active</mat-option>
+          <mat-select [(ngModel)]="queueStatusFilters" multiple (selectionChange)="loadQueue()">
             <mat-option value="pending">Pending</mat-option>
             <mat-option value="processing">Processing</mat-option>
             <mat-option value="completed">Completed</mat-option>
@@ -127,8 +125,7 @@
         </mat-form-field>
         <mat-form-field appearance="outline" class="queue-filter">
           <mat-label>Type</mat-label>
-          <mat-select [(ngModel)]="queueTypeFilter" (selectionChange)="loadQueue()">
-            <mat-option value="">All Types</mat-option>
+          <mat-select [(ngModel)]="queueTypeFilters" multiple (selectionChange)="loadQueue()">
             <mat-option value="ffprobe">FFprobe</mat-option>
             <mat-option value="transcode">Transcode</mat-option>
             <mat-option value="transcription">Transcription</mat-option>
@@ -165,7 +162,12 @@
               <td>{{ job.worker_id || '-' }}</td>
               <td>{{ job.retry_count }}/{{ job.max_retries }}</td>
               <td>{{ job.created_at | date:'shortDate' }}</td>
-              <td>
+              <td class="action-cell">
+                <button *ngIf="job.status === 'pending'"
+                        mat-icon-button color="primary" (click)="$event.stopPropagation(); runJob( job.id )"
+                        matTooltip="Run this job now">
+                  <mat-icon>play_arrow</mat-icon>
+                </button>
                 <button *ngIf="job.status === 'pending' || job.status === 'processing'"
                         mat-icon-button color="warn" (click)="$event.stopPropagation(); cancelJob( job.id )"
                         matTooltip="Cancel job">
@@ -283,6 +285,13 @@
         <mat-slide-toggle [(ngModel)]="typeFfprobe">
           Enable FFprobe jobs
         </mat-slide-toggle>
+        <button *ngIf="typeFfprobe" mat-stroked-button
+                [color]="isTypePaused( 'ffprobe' ) ? 'warn' : undefined"
+                (click)="togglePauseType( 'ffprobe' )"
+                matTooltip="Temporarily pause this job type without disabling it">
+          <mat-icon>{{ isTypePaused( 'ffprobe' ) ? 'play_arrow' : 'pause' }}</mat-icon>
+          {{ isTypePaused( 'ffprobe' ) ? 'Resume' : 'Pause' }}
+        </button>
       </div>
       <h2>
         <mat-icon>info</mat-icon>
@@ -330,6 +339,13 @@
         <mat-slide-toggle [(ngModel)]="typeTranscode">
           Enable Transcode jobs
         </mat-slide-toggle>
+        <button *ngIf="typeTranscode" mat-stroked-button
+                [color]="isTypePaused( 'transcode' ) ? 'warn' : undefined"
+                (click)="togglePauseType( 'transcode' )"
+                matTooltip="Temporarily pause this job type without disabling it">
+          <mat-icon>{{ isTypePaused( 'transcode' ) ? 'play_arrow' : 'pause' }}</mat-icon>
+          {{ isTypePaused( 'transcode' ) ? 'Resume' : 'Pause' }}
+        </button>
       </div>
       <h2>
         <mat-icon>movie</mat-icon>
@@ -409,6 +425,13 @@
         <mat-slide-toggle [(ngModel)]="typeTranscription">
           Enable Transcription jobs
         </mat-slide-toggle>
+        <button *ngIf="typeTranscription" mat-stroked-button
+                [color]="isTypePaused( 'transcription' ) ? 'warn' : undefined"
+                (click)="togglePauseType( 'transcription' )"
+                matTooltip="Temporarily pause this job type without disabling it">
+          <mat-icon>{{ isTypePaused( 'transcription' ) ? 'play_arrow' : 'pause' }}</mat-icon>
+          {{ isTypePaused( 'transcription' ) ? 'Resume' : 'Pause' }}
+        </button>
       </div>
       <h2>
         <mat-icon>mic</mat-icon>
@@ -472,6 +495,13 @@
         <mat-slide-toggle [(ngModel)]="typeClaude">
           Enable Claude Processing jobs
         </mat-slide-toggle>
+        <button *ngIf="typeClaude" mat-stroked-button
+                [color]="isTypePaused( 'claude-processing' ) ? 'warn' : undefined"
+                (click)="togglePauseType( 'claude-processing' )"
+                matTooltip="Temporarily pause this job type without disabling it">
+          <mat-icon>{{ isTypePaused( 'claude-processing' ) ? 'play_arrow' : 'pause' }}</mat-icon>
+          {{ isTypePaused( 'claude-processing' ) ? 'Resume' : 'Pause' }}
+        </button>
       </div>
       <h2>
         <mat-icon>psychology</mat-icon>

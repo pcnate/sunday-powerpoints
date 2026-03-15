@@ -1,5 +1,6 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
@@ -12,6 +13,9 @@ import { Subject, takeUntil } from 'rxjs';
 import { SocketService } from '../../socket.service';
 import { NotesDialogComponent } from '../shared/notes-dialog.component';
 import { KdenliveDialogComponent } from '../shared/kdenlive-dialog.component';
+import { QueueJobDialogComponent } from '../shared/queue-job-dialog.component';
+import { YoutubeDialogComponent } from '../upcoming/youtube-dialog.component';
+import { SimpleConfirmDialogComponent } from '../shared/simple-confirm-dialog.component';
 
 
 /**
@@ -38,6 +42,7 @@ interface RawFolder {
   youtubeUrl: string | null;
   backlog: boolean;
   archived: boolean;
+  relativePath: string;
 }
 
 
@@ -75,6 +80,7 @@ interface FolderInfo extends RawFolder {
     MatTooltipModule,
     MatProgressSpinnerModule,
     MatDialogModule,
+    RouterLink,
   ],
   templateUrl: './outstanding.component.html',
   styleUrls: [ './outstanding.component.scss' ]
@@ -89,6 +95,9 @@ export class OutstandingComponent implements OnInit, OnDestroy {
   totalCount = 0;
   needsAttentionCount = 0;
   completeCount = 0;
+
+  /** Maps sunday_date → job_type → status for active (pending/processing) jobs */
+  activeJobs: Record<string, Record<string, string>> = {};
 
   private destroy$ = new Subject<void>();
 
@@ -108,6 +117,13 @@ export class OutstandingComponent implements OnInit, OnDestroy {
 
     this.socketService.on( 'folder-changes' ).pipe( takeUntil( this.destroy$ ) )
       .subscribe( () => this.loadFolders() );
+    this.socketService.on( 'job:created' ).pipe( takeUntil( this.destroy$ ) )
+      .subscribe( () => this.loadActiveJobs() );
+    this.socketService.on( 'job:updated' ).pipe( takeUntil( this.destroy$ ) )
+      .subscribe( () => {
+        this.loadActiveJobs();
+        this.loadFolders();
+      });
   }
 
 
@@ -131,6 +147,31 @@ export class OutstandingComponent implements OnInit, OnDestroy {
         this.loading = false;
       },
       error: () => { this.loading = false; },
+    });
+    this.loadActiveJobs();
+  }
+
+
+  /**
+   * Fetch pending and processing jobs to show queued/active status on icons.
+   */
+  loadActiveJobs(): void {
+    this.http.get<{ jobs: { sunday_date: string; type: string; status: string }[] }>(
+      '/api/jobs?status=pending,processing&type=transcode,transcription,claude-processing&limit=200'
+    ).subscribe({
+      next: ( data ) => {
+        const map: Record<string, Record<string, string>> = {};
+        for ( const job of data.jobs ) {
+          if ( !map[ job.sunday_date ] ) map[ job.sunday_date ] = {};
+          const existing = map[ job.sunday_date ][ job.type ];
+          // processing takes priority over pending
+          if ( !existing || job.status === 'processing' ) {
+            map[ job.sunday_date ][ job.type ] = job.status;
+          }
+        }
+        this.activeJobs = map;
+      },
+      error: () => { this.activeJobs = {}; },
     });
   }
 
@@ -176,6 +217,7 @@ export class OutstandingComponent implements OnInit, OnDestroy {
         { key: 'Transcription', has: f.hasTranscription || ytDone },
         { key: 'Summary', has: f.hasSummary || ytDone },
         { key: 'YouTube', has: ytDone },
+        { key: 'Archive', has: f.archived },
       ];
 
       const stage1Complete = stage1.every( ( c ) => c.has );
@@ -262,6 +304,31 @@ export class OutstandingComponent implements OnInit, OnDestroy {
 
 
   /**
+   * Get the active job status for a folder and job type.
+   *
+   * @param folderName - YYYYMMDD folder name
+   * @param jobType - job type (transcode, transcription, claude-processing)
+   * @returns 'pending', 'processing', or null
+   */
+  jobStatus( folderName: string, jobType: string ): string | null {
+    return this.activeJobs[ folderName ]?.[ jobType ] || null;
+  }
+
+
+  /**
+   * Build a routerLink path to the planning view for a folder's month.
+   *
+   * @param name - YYYYMMDD folder name
+   * @returns route path segments
+   */
+  monthRoute( name: string ): string[] {
+    const year = name.substring( 0, 4 );
+    const month = String( parseInt( name.substring( 4, 6 ), 10 ) );
+    return [ '/planning', year, month ];
+  }
+
+
+  /**
    * Get completion percentage for a folder.
    *
    * @param folder - the folder info
@@ -314,12 +381,85 @@ export class OutstandingComponent implements OnInit, OnDestroy {
 
 
   /**
-   * Open a YouTube URL in a new tab.
+   * Open the queue transcription dialog for a folder.
    *
-   * @param url - the YouTube URL to open
+   * @param folder - the folder to queue transcription for
    */
-  openYoutube( url: string ): void {
-    window.open( url, '_blank' );
+  queueTranscription( folder: FolderInfo ): void {
+    this.dialog.open( QueueJobDialogComponent, {
+      width: '550px',
+      data: { folderName: folder.name, jobType: 'transcription' },
+    }).afterClosed().subscribe( ( queued ) => {
+      if ( queued ) this.loadFolders();
+    });
+  }
+
+
+  /**
+   * Open the queue claude-processing dialog for a folder.
+   *
+   * @param folder - the folder to queue claude processing for
+   */
+  queueClaude( folder: FolderInfo ): void {
+    this.dialog.open( QueueJobDialogComponent, {
+      width: '550px',
+      data: { folderName: folder.name, jobType: 'claude-processing' },
+    }).afterClosed().subscribe( ( queued ) => {
+      if ( queued ) this.loadFolders();
+    });
+  }
+
+
+  /**
+   * Open the YouTube URL dialog to set or update the link.
+   *
+   * @param folder - the folder to set the YouTube URL for
+   */
+  /**
+   * Archive a folder after confirming with a dialog.
+   *
+   * @param folder - the folder to archive
+   */
+  archiveFolder( folder: FolderInfo ): void {
+    const year = folder.name.slice( 0, 4 );
+    const lastSlash = folder.relativePath.lastIndexOf( '/' );
+    const outputDir = folder.backlog
+      ? folder.relativePath.substring( 0, folder.relativePath.lastIndexOf( '/', lastSlash - 1 ) )
+      : folder.relativePath.substring( 0, lastSlash );
+    const archivePath = `${ outputDir }/${ year }/${ folder.name }`;
+
+    const dialogRef = this.dialog.open( SimpleConfirmDialogComponent, {
+      width: '450px',
+      data: {
+        title: 'Archive Folder',
+        message: `Archive ${ folder.displayDate }?`,
+        detail: `${ folder.relativePath } → ${ archivePath }`,
+        icon: 'archive',
+        confirmLabel: 'Archive',
+      },
+    });
+
+    dialogRef.afterClosed().subscribe( ( confirmed ) => {
+      if ( !confirmed ) return;
+      this.http.post<{ ok: boolean }>( `/api/folders/${ folder.name }/archive`, {} ).subscribe({
+        next: () => this.loadFolders(),
+        error: ( err ) => console.error( 'Failed to archive folder:', err ),
+      });
+    });
+  }
+
+
+  openYoutube( folder: FolderInfo ): void {
+    this.dialog.open( YoutubeDialogComponent, {
+      width: '500px',
+      data: {
+        folder: folder.name,
+        date: folder.displayDate,
+        currentUrl: folder.youtubeUrl,
+      },
+    }).afterClosed().subscribe( ( result ) => {
+      if ( result !== undefined ) this.loadFolders();
+    });
   }
 
 

@@ -1,7 +1,8 @@
 use chrono::{ DateTime, Utc };
 use serde::{ Deserialize, Serialize };
-use tokio::sync::RwLock;
+use tokio::sync::{ Notify, RwLock };
 
+use crate::broadcast::{ EventSender, StatusSnapshot, WorkerEvent };
 use crate::config::AppConfig;
 
 
@@ -52,6 +53,10 @@ pub enum TrayCommand {
     RunOnce,
     /// Toggle force on-shift (bypass shift window).
     ToggleForceOnShift,
+    /// Toggle pause for a specific job type (runtime only, not persisted).
+    TogglePauseJobType( String ),
+    /// Claim and execute a specific job by ID.
+    RunJob( u32 ),
 }
 
 
@@ -66,6 +71,8 @@ pub struct TrayState {
     pub jobs_failed: u32,
     pub uptime_secs: u64,
     pub force_on_shift: bool,
+    pub active_types: Vec<String>,
+    pub paused_types: Vec<String>,
 }
 
 
@@ -80,6 +87,8 @@ impl Default for TrayState {
             jobs_failed: 0,
             uptime_secs: 0,
             force_on_shift: false,
+            active_types: Vec::new(),
+            paused_types: Vec::new(),
         }
     }
 }
@@ -96,12 +105,16 @@ pub struct AppState {
     pub jobs_failed: RwLock<u32>,
     pub started_at: DateTime<Utc>,
     pub force_on_shift: RwLock<bool>,
+    pub paused_types: RwLock<Vec<String>>,
+    pub event_tx: EventSender,
+    /// Notified by the SSE client when a new job is created on the server.
+    pub poll_notify: Notify,
 }
 
 
 impl AppState {
-    /// Create a new AppState with the given configuration.
-    pub fn new( config: AppConfig ) -> Self {
+    /// Create a new AppState with the given configuration and event sender.
+    pub fn new( config: AppConfig, event_tx: EventSender ) -> Self {
         Self {
             config: RwLock::new( config ),
             phase: RwLock::new( SchedulerPhase::OffShift ),
@@ -112,12 +125,25 @@ impl AppState {
             jobs_failed: RwLock::new( 0 ),
             started_at: Utc::now(),
             force_on_shift: RwLock::new( false ),
+            paused_types: RwLock::new( Vec::new() ),
+            event_tx,
+            poll_notify: Notify::new(),
         }
+    }
+
+
+    /// Broadcast an event to all WebSocket clients.
+    ///
+    /// Silently drops if there are no active receivers.
+    pub fn emit( &self, event: WorkerEvent ) {
+        let _ = self.event_tx.send( event );
     }
 
 
     /// Take a snapshot of the current state for the tray UI.
     pub async fn snapshot( &self ) -> TrayState {
+        let config = self.config.read().await;
+
         TrayState {
             phase: *self.phase.read().await,
             connected: *self.connected.read().await,
@@ -127,6 +153,32 @@ impl AppState {
             jobs_failed: *self.jobs_failed.read().await,
             uptime_secs: ( Utc::now() - self.started_at ).num_seconds() as u64,
             force_on_shift: *self.force_on_shift.read().await,
+            active_types: config.worker.types.clone(),
+            paused_types: self.paused_types.read().await.clone(),
+        }
+    }
+
+
+    /// Build a full status snapshot for WebSocket clients.
+    pub async fn status_snapshot( &self ) -> StatusSnapshot {
+        let config = self.config.read().await;
+
+        StatusSnapshot {
+            phase: self.phase.read().await.to_string(),
+            connected: *self.connected.read().await,
+            current_job_id: *self.current_job_id.read().await,
+            current_job_type: self.current_job_type.read().await.clone(),
+            jobs_completed: *self.jobs_completed.read().await,
+            jobs_failed: *self.jobs_failed.read().await,
+            uptime_secs: ( Utc::now() - self.started_at ).num_seconds() as u64,
+            worker_id: config.worker.id.clone(),
+            server_url: config.server.url.clone(),
+            schedule_enabled: config.schedule.enabled,
+            shift_start: config.schedule.shift_start.clone(),
+            shift_end: config.schedule.shift_end.clone(),
+            force_on_shift: *self.force_on_shift.read().await,
+            paused_types: self.paused_types.read().await.clone(),
+            active_types: config.worker.types.clone(),
         }
     }
 }
